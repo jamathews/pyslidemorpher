@@ -12,9 +12,32 @@ from concurrent.futures import ProcessPoolExecutor
 import tempfile
 import logging
 import subprocess
+import atexit
+import signal
 
 # Initialize logger at module level
 logger = logging.getLogger()
+
+# Global ProcessPoolExecutor instance
+_process_pool = None
+
+def cleanup_processes():
+    """Cleanup multiprocessing resources properly"""
+    global _process_pool
+    if _process_pool is not None:
+        _process_pool.shutdown(wait=True)
+        _process_pool = None
+    
+    # Clean up any remaining child processes
+    for process in mp.active_children():
+        process.terminate()
+        process.join()
+
+# Register cleanup function
+atexit.register(cleanup_processes)
+
+# Handle SIGTERM gracefully
+signal.signal(signal.SIGTERM, lambda signo, frame: cleanup_processes())
 
 def setup_logging(log_level):
     """Configure logging based on a specified log level"""
@@ -74,50 +97,50 @@ def jpeg_to_array(path, target_height, target_width):
     img_array = np.array(img)
     return center_pad_image(img_array, target_height, target_width)
 
-def bubble_sort_frames(img_array, highlight_swaps=False, swap_flash=False):
-    frames = []
-    height, width, _ = img_array.shape
-    img_array = img_array.copy()
-    frames.append(img_array.copy())
-    
-    logger.debug(f"Starting bubble sort on image of size {width}x{height}")
-    total_swaps = 0
-    
-    for i in range(height):
-        logger.debug(f"Processing row {i}/{height}")
-        for channel in range(3):
-            logger.debug(f"Processing channel {channel} in row {i}")
-            swapped = False
-            row_swaps = 0
-            
-            for j in range(width - 1):
-                for k in range(width - j - 1):
-                    if img_array[i, k, channel] > img_array[i, k + 1, channel]:
-                        img_array[i, k, channel], img_array[i, k + 1, channel] = \
-                            img_array[i, k + 1, channel], img_array[i, k, channel]
-                        swapped = True
-                        row_swaps += 1
-                        
-                        if highlight_swaps:
-                            frame = img_array.copy()
-                            frame[i, k] = [255, 0, 0]
-                            frame[i, k + 1] = [255, 0, 0]
-                            frames.append(frame)
-                            
-                            if swap_flash:
-                                frames.append(img_array.copy())
-                        else:
-                            frames.append(img_array.copy())
-                            
-            if not swapped:
-                logger.debug(f"Row {i}, channel {channel} already sorted")
-                break
-            else:
-                logger.debug(f"Row {i}, channel {channel} completed with {row_swaps} swaps")
-                total_swaps += row_swaps
-    
-    logger.debug(f"Bubble sort completed with {total_swaps} total swaps and {len(frames)} frames generated")
-    return frames
+# def bubble_sort_frames(img_array, highlight_swaps=False, swap_flash=False):
+#     frames = []
+#     height, width, _ = img_array.shape
+#     img_array = img_array.copy()
+#     frames.append(img_array.copy())
+#
+#     logger.debug(f"Starting bubble sort on image of size {width}x{height}")
+#     total_swaps = 0
+#
+#     for i in range(height):
+#         logger.debug(f"Processing row {i}/{height}")
+#         for channel in range(3):
+#             logger.debug(f"Processing channel {channel} in row {i}")
+#             swapped = False
+#             row_swaps = 0
+#
+#             for j in range(width - 1):
+#                 for k in range(width - j - 1):
+#                     if img_array[i, k, channel] > img_array[i, k + 1, channel]:
+#                         img_array[i, k, channel], img_array[i, k + 1, channel] = \
+#                             img_array[i, k + 1, channel], img_array[i, k, channel]
+#                         swapped = True
+#                         row_swaps += 1
+#
+#                         if highlight_swaps:
+#                             frame = img_array.copy()
+#                             frame[i, k] = [255, 0, 0]
+#                             frame[i, k + 1] = [255, 0, 0]
+#                             frames.append(frame)
+#
+#                             if swap_flash:
+#                                 frames.append(img_array.copy())
+#                         else:
+#                             frames.append(img_array.copy())
+#
+#             if not swapped:
+#                 logger.debug(f"Row {i}, channel {channel} already sorted")
+#                 break
+#             else:
+#                 logger.debug(f"Row {i}, channel {channel} completed with {row_swaps} swaps")
+#                 total_swaps += row_swaps
+#
+#     logger.debug(f"Bubble sort completed with {total_swaps} total swaps and {len(frames)} frames generated")
+#     return frames
 
 def write_frames_to_video(frames, output_path, fps=60):
     """Write frames to a video file"""
@@ -287,9 +310,10 @@ def main():
     # Setup logging with the specified level
     logger = setup_logging(args.log_level)
 
-    # Create a temporary directory for intermediate files
-    temp_dir = mkdtemp()
     try:
+        # Create a temporary directory for intermediate files
+        temp_dir = mkdtemp()
+        
         # Get maximum dimensions
         max_height, max_width = get_max_dimensions(args.folder)
         logger.info(f"Maximum dimensions: {max_width}x{max_height}")
@@ -317,18 +341,23 @@ def main():
         ]
         
         logger.info("Processing images in parallel...")
+        
+        # Initialize the global process pool
+        global _process_pool
         if not args.workers:
             max_workers = max(1, mp.cpu_count() // 2)
         else:
             max_workers = args.workers
         logger.debug(f"Using {max_workers} worker processes")
         
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            results = []
-            for i, result in enumerate(executor.map(process_single_image, process_args)):
-                logger.debug(f"Completed processing image {i+1}/{len(process_args)}")
-                results.append(result)
+        _process_pool = ProcessPoolExecutor(max_workers=max_workers)
         
+        # Use the global process pool
+        results = []
+        for i, result in enumerate(_process_pool.map(process_single_image, process_args)):
+            logger.debug(f"Completed processing image {i+1}/{len(process_args)}")
+            results.append(result)
+            
         # Filter out any failed processes
         results = [r for r in results if r is not None]
         logger.debug(f"Successfully processed {len(results)} images")
@@ -360,6 +389,8 @@ def main():
         logger.error(f"An error occurred: {str(e)}", exc_info=True)
         raise
     finally:
+        # Cleanup processes before cleaning up files
+        cleanup_processes()
         logger.debug("Cleaning up temporary files...")
         shutil.rmtree(temp_dir)
 
@@ -385,16 +416,16 @@ def bubble_sort_frames_buffered(img_array, temp_dir, highlight_swaps=False, swap
     swap_count = 0
     
     for i in range(height):
-        logger.debug(f"Processing row {i}/{height}")
+        # logger.debug(f"Processing row {i}/{height}")
         for channel in range(3):
-            logger.debug(f"Processing channel {channel} in row {i}")
+            # logger.debug(f"Processing channel {channel} in row {i}")
             swapped = False
             row_swaps = 0
             
             for j in range(width - 1):
-                logger.debug(f"Processing col {j}/{width}")
+                # logger.debug(f"Processing row {i}/{height} col {j}/{width}")
                 for k in range(width - j - 1):
-                    logger.debug(f"Processing progress {k}/{width - j - 1}")
+                    logger.debug(f"Processing row {i}/{height}\tchannel {channel}/3\tcol {j}/{width}\tprogress {k}/{width - j - 1}")
                     if img_array[i, k, channel] > img_array[i, k + 1, channel]:
                         img_array[i, k, channel], img_array[i, k + 1, channel] = \
                             img_array[i, k + 1, channel], img_array[i, k, channel]
