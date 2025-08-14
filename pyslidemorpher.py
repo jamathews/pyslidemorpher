@@ -119,15 +119,19 @@ def main():
         for _ in range(len(sort_frames)):
             static_frames.append(unmodified_frame)
 
+        sorted_frame = sort_frames[-1]
+        sorted_static_frames = []
+        for _ in range(len(sort_frames)//2):
+            sorted_static_frames.append(sorted_frame)
         rev_frames = list(reversed(sort_frames))
-        short_vid = rev_frames + static_frames + sort_frames
+        short_vid = sorted_static_frames + rev_frames + static_frames + sort_frames + sorted_static_frames
 
         # Pad the frames of this video segment to match max dimensions
         padded_vid = [pad_to_size(frame, max_w, max_h) for frame in short_vid]
 
         if idx > 0:
             # Create cross-dissolve between padded videos
-            transition = cross_col_dissolve(all_frames, padded_vid, steps=len(sort_frames))
+            transition = cross_diag_dissolve(all_frames, padded_vid, steps=len(sort_frames))
             all_frames.extend(transition)
 
         all_frames.extend(padded_vid)
@@ -790,6 +794,57 @@ def diag_sort(img):
             final_frames.append(frame)
         frames = final_frames
     
+    return frames
+
+
+def cross_diag_dissolve(vid1, vid2, steps=15):
+    """Generate frames blending vid1 last frame to vid2 first frame by randomly swapping diagonals.
+
+    Args:
+        vid1: First video (list of frames)
+        vid2: Second video (list of frames)
+        steps: Number of transition frames to generate
+
+    Returns:
+        List of frames showing the diagonal-swap transition
+    """
+    frames = []
+    last1 = vid1[-1].copy()
+    first2 = vid2[0].copy()
+    height, width = last1.shape[:2]
+
+    # Calculate total number of diagonals
+    total_diags = width + height - 1
+
+    # Create list of diagonal indices and shuffle
+    diags = list(range(total_diags))
+    np.random.shuffle(diags)
+
+    # Calculate how many diagonals to swap per frame
+    diags_per_step = max(1, total_diags // steps)
+
+    # Generate transition frames
+    result = last1.copy()
+    for i in range(steps):
+        # Calculate range of diagonals to swap in this step
+        start_idx = i * diags_per_step
+        end_idx = min(start_idx + diags_per_step, total_diags)
+
+        # Swap the diagonals
+        for diag_idx in diags[start_idx:end_idx]:
+            # Calculate points on this diagonal
+            x = max(0, diag_idx - height + 1)
+            y = max(0, height - 1 - diag_idx)
+
+            # Copy all points on the diagonal
+            while x < width and y < height:
+                if 0 <= x < width and 0 <= y < height:
+                    result[y, x] = first2[y, x]
+                x += 1
+                y += 1
+
+        frames.append(result.copy())
+
     return frames
 
 if __name__ == "__main__":
