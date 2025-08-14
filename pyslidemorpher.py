@@ -71,8 +71,8 @@ def main():
                         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         help="Set the logging level")
     parser.add_argument("--sort-algorithm",
-                        choices=["bubble", "quick", "counting", "radix", "bucket", "col", "hue"],
-                        default="hue",
+                        choices=["bubble", "quick", "counting", "radix", "bucket", "col", "hue", "corner", "diag"],
+                        default="diag",
                         help="Sorting algorithm to use (default: quick)")
     args = parser.parse_args()
 
@@ -101,6 +101,8 @@ def main():
         "bucket": bucket_sort_frames_hue,
         "col": col_sort_frames,
         "hue": sort_columns_by_hue,
+        "corner": corner_sort,
+        "diag": diag_sort,
     }
     sort_function = sort_functions[args.sort_algorithm]
 
@@ -114,7 +116,7 @@ def main():
         # Add 5 seconds of unmodified image (24 fps * 5 seconds = 120 frames)
         unmodified_frame = sort_frames[0]
         static_frames = []
-        for _ in range(24 * 5):
+        for _ in range(len(sort_frames)):
             static_frames.append(unmodified_frame)
 
         rev_frames = list(reversed(sort_frames))
@@ -125,7 +127,7 @@ def main():
 
         if idx > 0:
             # Create cross-dissolve between padded videos
-            transition = cross_dissolve(all_frames, padded_vid)
+            transition = cross_col_dissolve(all_frames, padded_vid, steps=len(sort_frames))
             all_frames.extend(transition)
 
         all_frames.extend(padded_vid)
@@ -534,7 +536,7 @@ def sort_columns_by_hue(img):
     Returns:
         List of frames for a 5-second animation at 24 fps
     """
-    target_frames = 5 * 24
+    target_frames = 2 * 24
 
     # Create initial frame
     result = np.copy(img)
@@ -563,8 +565,8 @@ def sort_columns_by_hue(img):
             column_hsv = hsv[:, col].copy()
 
             # Create sorting indices based on HSV values
-            sort_keys = [(h, s, v, i) for i, (h, s, v) in enumerate(column_hsv)]
-            sorted_indices = [i for h, s, v, i in sorted(sort_keys)]
+            sort_keys = [(v, s, h, i) for i, (h, s, v) in enumerate(column_hsv)]
+            sorted_indices = [i for h, s, v, i in reversed(sorted(sort_keys))]
 
             # Apply sorting to the column
             result[:, col] = column_bgr[sorted_indices]
@@ -593,6 +595,202 @@ def sort_columns_by_hue(img):
 
     return frames
 
+
+def cross_col_dissolve(vid1, vid2, steps=15):
+    """Generate frames blending vid1 last frame to vid2 first frame by randomly swapping columns.
+    
+    Args:
+        vid1: First video (list of frames)
+        vid2: Second video (list of frames)
+        steps: Number of transition frames to generate
+        
+    Returns:
+        List of frames showing the column-swap transition
+    """
+    frames = []
+    last1 = vid1[-1].copy()
+    first2 = vid2[0].copy()
+    height, width = last1.shape[:2]
+
+    # Create list of column indices and shuffle
+    cols = list(range(width))
+    np.random.shuffle(cols)
+
+    # Calculate how many columns to swap per frame
+    cols_per_step = max(1, width // steps)
+
+    # Generate transition frames
+    result = last1.copy()
+    for i in range(steps):
+        # Calculate range of columns to swap in this step
+        start_idx = i * cols_per_step
+        end_idx = min(start_idx + cols_per_step, width)
+
+        # Swap the columns
+        for col_idx in cols[start_idx:end_idx]:
+            result[:, col_idx] = first2[:, col_idx]
+
+        frames.append(result.copy())
+
+    return frames
+
+
+def corner_sort(img):
+    """Generate frames by first sorting columns by hue, then sorting the resulting frames by rows.
+    
+    Args:
+        img: Input image in BGR format (OpenCV default)
+        
+    Returns:
+        List of frames showing the progressive sorting effect
+    """
+    target_frames = 2 * 24  # 2 seconds at 24fps
+
+    # Phase 1: Get frames from column-wise sorting
+    result = np.copy(img)
+    frames = [np.copy(result)]
+    height, width = img.shape[:2]
+    
+    # Convert to HSV for hue-based sorting
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # Sort columns first
+    columns = list(range(width))
+    np.random.shuffle(columns)
+    columns_per_frame = max(1, width // target_frames)
+    
+    for col_start in range(0, width, columns_per_frame):
+        col_end = min(col_start + columns_per_frame, width)
+        
+        for col_idx in range(col_start, col_end):
+            col = columns[col_idx]
+            
+            column_bgr = result[:, col].copy()
+            column_hsv = hsv[:, col].copy()
+            
+            sort_keys = [(v, s, h, i) for i, (h, s, v) in enumerate(column_hsv)]
+            sorted_indices = [i for h, s, v, i in reversed(sorted(sort_keys))]
+            
+            result[:, col] = column_bgr[sorted_indices]
+        
+        frames.append(np.copy(result))
+
+    # Phase 2: Sort the frames by rows
+    sorted_frames = []
+    last_frame = frames[-1]  # Keep the final frame from column sorting
+    
+    # For each row, create a new frame by progressively replacing rows
+    # from top to bottom with the corresponding row from the last frame
+    height = last_frame.shape[0]
+    for row in range(height):
+        new_frame = np.copy(frames[0])  # Start with first frame
+        # Replace all rows up to current row with rows from final frame
+        new_frame[:row+1] = last_frame[:row+1]
+        sorted_frames.append(new_frame)
+    
+    # Combine both phases
+    all_frames = frames + sorted_frames
+    
+    # Interpolate if needed
+    target_total_frames = target_frames * 2
+    if len(all_frames) < target_total_frames:
+        final_frames = []
+        for i in range(target_total_frames):
+            idx = i * (len(all_frames) - 1) / (target_total_frames - 1)
+            frame1_idx = int(idx)
+            frame2_idx = min(frame1_idx + 1, len(all_frames) - 1)
+            frac = idx - frame1_idx
+            
+            frame = cv2.addWeighted(
+                all_frames[frame1_idx], 1 - frac,
+                all_frames[frame2_idx], frac,
+                0
+            )
+            final_frames.append(frame)
+        all_frames = final_frames
+    
+    return all_frames
+
+def diag_sort(img):
+    """Generate frames showing diagonal sorting by hue.
+    
+    Args:
+        img: Input image in BGR format (OpenCV default)
+        
+    Returns:
+        List of frames showing diagonal sorting animation
+    """
+    target_frames = 2 * 24  # 2 seconds at 24fps
+    frames = [np.copy(img)]
+    result = np.copy(img)
+    height, width = img.shape[:2]
+    
+    # Convert to HSV for hue-based sorting
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # Get all diagonal indices
+    total_diags = width + height - 1
+    
+    # Create list of diagonals and shuffle them
+    diags = list(range(total_diags))
+    np.random.shuffle(diags)
+    
+    diags_per_frame = max(1, total_diags // target_frames)
+    
+    for diag_start in range(0, total_diags, diags_per_frame):
+        diag_end = min(diag_start + diags_per_frame, total_diags)
+        
+        # Process each diagonal in this batch
+        for diag_idx in range(diag_start, diag_end):
+            diag = diags[diag_idx]
+            
+            # Calculate points on this diagonal
+            diag_points = []
+            # Start point of diagonal
+            x = max(0, diag - height + 1)
+            y = max(0, height - 1 - diag)
+            
+            # Collect all points on the diagonal
+            while x < width and y < height:
+                if 0 <= x < width and 0 <= y < height:
+                    diag_points.append((y, x))
+                x += 1
+                y += 1
+            
+            if diag_points:
+                # Get diagonal pixels in both BGR and HSV
+                diag_bgr = np.array([result[y, x] for y, x in diag_points])
+                diag_hsv = np.array([hsv[y, x] for y, x in diag_points])
+                
+                # Create sorting indices based on HSV values
+                sort_keys = [(v, s, h, i) for i, (h, s, v) in enumerate(diag_hsv)]
+                sorted_indices = [i for h, s, v, i in reversed(sorted(sort_keys))]
+                
+                # Apply sorting to the diagonal
+                sorted_bgr = diag_bgr[sorted_indices]
+                for idx, (y, x) in enumerate(diag_points):
+                    result[y, x] = sorted_bgr[idx]
+        
+        frames.append(np.copy(result))
+    
+    # Interpolate if we have too few frames
+    if len(frames) < target_frames:
+        final_frames = []
+        for i in range(target_frames):
+            idx = i * (len(frames) - 1) / (target_frames - 1)
+            frame1_idx = int(idx)
+            frame2_idx = min(frame1_idx + 1, len(frames) - 1)
+            frac = idx - frame1_idx
+            
+            frame = cv2.addWeighted(
+                frames[frame1_idx], 1 - frac,
+                frames[frame2_idx], frac,
+                0
+            )
+            final_frames.append(frame)
+        frames = final_frames
+    
+    return frames
 
 if __name__ == "__main__":
     main()
