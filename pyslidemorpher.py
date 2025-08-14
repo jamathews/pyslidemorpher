@@ -105,7 +105,8 @@ def main():
         # "bucket": bucket_sort_frames,
         "bucket": bucket_sort_frames_luminosity,
         "bucket": bucket_sort_frames_hue,
-        "col": col_sort_frames,
+        # "col": col_sort_frames,
+        "col": sort_columns_by_hue,
     }
     sort_function = sort_functions[args.sort_algorithm]
 
@@ -421,7 +422,7 @@ def bucket_sort_frames_hue(img):
     return frames
 
 def col_sort_frames(img):
-    """Return a list of frames showing column-wise hue sorting progress.
+    """Return a list of frames showing column-wise hue sorting progress using mergesort.
     
     Args:
         img: Input image in BGR format (OpenCV default)
@@ -432,33 +433,148 @@ def col_sort_frames(img):
     frames = []
     result = np.copy(img)
     height, width = img.shape[:2]
-    logging.debug(f"Starting column-wise hue sort on {width} columns")
+    logging.debug(f"Starting column-wise mergesort on {width} columns")
     
     # Convert to HSV color space
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     
+    def merge(arr_bgr, arr_hsv, left, mid, right, col):
+        """Merge two sorted subarrays and update frames."""
+        # Create temporary arrays for BGRs and HSVs
+        L_bgr = arr_bgr[left:mid]
+        R_bgr = arr_bgr[mid:right]
+        L_hsv = arr_hsv[left:mid]
+        R_hsv = arr_hsv[mid:right]
+        
+        i = j = 0
+        k = left
+        
+        while i < len(L_hsv) and j < len(R_hsv):
+            # Compare using hue, then saturation, then value
+            L_key = (L_hsv[i][0], L_hsv[i][1], L_hsv[i][2])
+            R_key = (R_hsv[j][0], R_hsv[j][1], R_hsv[j][2])
+            
+            if L_key <= R_key:
+                arr_bgr[k] = L_bgr[i]
+                arr_hsv[k] = L_hsv[i]
+                i += 1
+            else:
+                arr_bgr[k] = R_bgr[j]
+                arr_hsv[k] = R_hsv[j]
+                j += 1
+            k += 1
+            
+            # Update the result image and capture frame
+            result[:, col] = arr_bgr
+            frames.append(np.copy(result))
+        
+        # Copy remaining elements
+        while i < len(L_hsv):
+            arr_bgr[k] = L_bgr[i]
+            arr_hsv[k] = L_hsv[i]
+            k += 1
+            i += 1
+            result[:, col] = arr_bgr
+            frames.append(np.copy(result))
+            
+        while j < len(R_hsv):
+            arr_bgr[k] = R_bgr[j]
+            arr_hsv[k] = R_hsv[j]
+            k += 1
+            j += 1
+            result[:, col] = arr_bgr
+            frames.append(np.copy(result))
+    
+    def mergesort(arr_bgr, arr_hsv, left, right, col):
+        """Recursive mergesort implementation."""
+        if right - left > 1:
+            mid = (left + right) // 2
+            mergesort(arr_bgr, arr_hsv, left, mid, col)
+            mergesort(arr_bgr, arr_hsv, mid, right, col)
+            merge(arr_bgr, arr_hsv, left, mid, right, col)
+    
     # Process each column
     for col in range(width):
         # Get the column's pixels
-        column_bgr = img[:, col].copy()
-        column_hsv = hsv[:, col]
+        column_bgr = result[:, col].copy()
+        column_hsv = hsv[:, col].copy()
         
-        # Create array of indices sorted by hue, saturation, and value
-        indices = np.lexsort((column_hsv[:, 2],    # Value
-                            column_hsv[:, 1],       # Saturation
-                            column_hsv[:, 0]))      # Hue
+        # Sort the column using mergesort
+        mergesort(column_bgr, column_hsv, 0, height, col)
         
-        # Reorder the column's pixels
-        result[:, col] = column_bgr[indices]
-        
-        # Capture frame periodically (every few columns)
-        if col % max(1, width // 50) == 0:
-            frames.append(np.copy(result))
+        # Ensure the final state of the column is captured
+        result[:, col] = column_bgr
+        frames.append(np.copy(result))
     
-    # Ensure we have the final frame
-    frames.append(np.copy(result))
+    logging.debug(f"Column-wise mergesort complete, generated {len(frames)} frames")
+    return frames
+
+def sort_columns_by_hue(img):
+    """Generate frames showing columns sorting by hue in random order.
     
-    logging.debug(f"Column-wise hue sort complete, generated {len(frames)} frames")
+    Args:
+        img: Input image in BGR format (OpenCV default)
+        
+    Returns:
+        List of frames for a 5-second animation at 24 fps
+    """
+    target_frames = 5 * 24
+    
+    # Create initial frame
+    result = np.copy(img)
+    frames = [np.copy(result)]
+    height, width = img.shape[:2]
+    
+    # Convert to HSV for hue-based sorting
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # Create list of columns and shuffle them
+    columns = list(range(width))
+    np.random.shuffle(columns)
+    
+    # Process one column at a time
+    columns_per_frame = max(1, width // target_frames)
+    
+    for col_start in range(0, width, columns_per_frame):
+        col_end = min(col_start + columns_per_frame, width)
+        
+        # Process each column in this shuffled batch
+        for col_idx in range(col_start, col_end):
+            col = columns[col_idx]  # Use shuffled column index
+            
+            # Get column pixels in both BGR and HSV
+            column_bgr = result[:, col].copy()
+            column_hsv = hsv[:, col].copy()
+            
+            # Create sorting indices based on HSV values
+            sort_keys = [(h, s, v, i) for i, (h, s, v) in enumerate(column_hsv)]
+            sorted_indices = [i for h, s, v, i in sorted(sort_keys)]
+            
+            # Apply sorting to the column
+            result[:, col] = column_bgr[sorted_indices]
+        
+        # Add frame after processing this batch of columns
+        frames.append(np.copy(result))
+    
+    # If we have too few frames, interpolate
+    if len(frames) < target_frames:
+        final_frames = []
+        for i in range(target_frames):
+            # Calculate fractional index into original frames
+            idx = i * (len(frames) - 1) / (target_frames - 1)
+            frame1_idx = int(idx)
+            frame2_idx = min(frame1_idx + 1, len(frames) - 1)
+            frac = idx - frame1_idx
+            
+            # Interpolate between frames
+            frame = cv2.addWeighted(
+                frames[frame1_idx], 1 - frac,
+                frames[frame2_idx], frac,
+                0
+            )
+            final_frames.append(frame)
+        frames = final_frames
+    
     return frames
 
 if __name__ == "__main__":
