@@ -88,24 +88,17 @@ def main():
         logging.error("No images found.")
         return
 
-    # Get max dimensions
+    # Get max dimensions for final output
     max_h = max(img.shape[0] for img in images)
     max_w = max(img.shape[1] for img in images)
     logging.info(f"Maximum dimensions: {max_w}x{max_h}")
-
-    # Pad all images
-    logging.info("Padding images to uniform size")
-    images = [pad_to_size(img, max_w, max_h) for img in images]
 
     sort_functions = {
         "bubble": bubble_sort_frames,
         "quick": quicksort_frames,
         "counting": counting_sort_frames,
         "radix": radix_sort_frames,
-        # "bucket": bucket_sort_frames,
-        "bucket": bucket_sort_frames_luminosity,
         "bucket": bucket_sort_frames_hue,
-        # "col": col_sort_frames,
         "col": sort_columns_by_hue,
     }
     sort_function = sort_functions[args.sort_algorithm]
@@ -113,12 +106,21 @@ def main():
     all_frames = []
     for idx, img in enumerate(images):
         logging.info(f"Processing image {idx + 1}/{len(images)}")
+        
+        # Create sorting animation at original image size
         sort_frames = sort_function(img)
         rev_frames = list(reversed(sort_frames))
         short_vid = rev_frames + sort_frames
+        
+        # Pad the frames of this video segment to match max dimensions
+        padded_vid = [pad_to_size(frame, max_w, max_h) for frame in short_vid]
+        
         if idx > 0:
-            all_frames.extend(cross_dissolve(all_frames, short_vid))
-        all_frames.extend(short_vid)
+            # Create cross-dissolve between padded videos
+            transition = cross_dissolve(all_frames, padded_vid)
+            all_frames.extend(transition)
+            
+        all_frames.extend(padded_vid)
 
     # Write to video
     if not args.output:
