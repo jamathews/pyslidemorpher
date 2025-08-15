@@ -138,7 +138,7 @@ def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease
 def main():
     ap = argparse.ArgumentParser(description="Pixel-morph slideshow video generator")
     ap.add_argument("photos_folder", type=Path, help="Folder containing images")
-    ap.add_argument("--out", default="pixel_morph.mp4", help="Output video filename")
+    ap.add_argument("--out", default=None, help="Output video filename")
     ap.add_argument("--fps", type=int, default=30, help="Frames per second")
     ap.add_argument("--seconds-per-transition", type=float, default=2.0)
     ap.add_argument("--hold", type=float, default=0.5)
@@ -156,6 +156,14 @@ def main():
     # Configure logging
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), None),
                         format="%(asctime)s - %(levelname)s - %(message)s")
+
+    # Construct default filename if --out is not specified
+    if args.out is None:
+        args.out = (f"slideshow_{args.size[0]}x{args.size[1]}_{args.fps}fps_"
+                    f"{args.pixel_size}px_{args.seconds_per_transition}s_"
+                    f"{args.hold}hold_{args.easing}_"
+                    f"{args.preset}.mp4")
+        logging.info(f"No --out specified. Using default filename: {args.out}")
 
     logging.info("Starting Pixel-Morph Slideshow generator.")
     files = list_images(args.photos_folder)
