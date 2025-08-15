@@ -14,6 +14,7 @@ import logging
 import random
 import sys
 from pathlib import Path
+import time  # Add at the top of the file if not already imported
 
 import cv2
 import imageio  # v2 API for get_writer
@@ -248,6 +249,10 @@ def main():
         for _ in range(init_hold):
             writer.append_data(imgs[0])
 
+        # Before the loop that processes transitions, create a start time
+        start_time = time.time()
+
+        # Update the loop to calculate and log transition times and estimated remaining time
         for i in range(len(imgs) - 1):
             logging.info(f"Processing transition {i + 1}/{len(imgs) - 1}")
             a, b = imgs[i], imgs[i + 1]
@@ -257,6 +262,8 @@ def main():
                 transition_fn = make_swarm_transition_frames
             else:
                 transition_fn = make_transition_frames
+
+            transition_start = time.time()  # Track the start time of the current transition
 
             for frame in transition_fn(
                     a, b,
@@ -268,7 +275,20 @@ def main():
                     seed=pair_seed,
             ):
                 writer.append_data(frame)
-            logging.debug(f"Finished transition {i + 1}/{len(imgs) - 1}")
+
+            transition_end = time.time()  # Track the end time of the current transition
+            elapsed_time = transition_end - transition_start
+
+            # Estimate total remaining time
+            transitions_completed = i + 1
+            avg_time_per_transition = (transition_end - start_time) / transitions_completed
+            remaining_transitions = (len(imgs) - 1) - transitions_completed
+            estimated_remaining_time = avg_time_per_transition * remaining_transitions
+
+            logging.info(f"Finished transition {i + 1}/{len(imgs) - 1} "
+                         f"in {elapsed_time:.2f} seconds. Estimated remaining time: "
+                         f"{estimated_remaining_time:.2f} seconds.")
+
             for _ in range(init_hold):
                 writer.append_data(b)
 
