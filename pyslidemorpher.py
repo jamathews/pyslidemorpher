@@ -241,6 +241,66 @@ def make_tornado_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, ho
         yield b_img
 
 
+def make_drip_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
+    """Create a transition where darkest pixels fall to the bottom and brightest pixels rise to the top."""
+    total_hold_frames = int(round(hold * fps))
+    logging.debug(f"Generating hold frames: {total_hold_frames}")
+    for _ in range(total_hold_frames):
+        yield a_img
+
+    H, W = a_img.shape[:2]
+    a_low, _ = downsample_for_particles(a_img, pixel_size)
+    b_low, grid_shape = downsample_for_particles(b_img, pixel_size)
+    a_pos, b_pos, a_cols, b_cols, grid_shape = prepare_transition(a_low, b_low, seed=seed)
+
+    n_frames = max(2, int(round(seconds * fps)))
+    ease = easing_fn(ease_name)
+
+    # Calculate pixel brightness for sorting
+    brightness = np.linalg.norm(a_cols, axis=1)  # Euclidean norm to approximate brightness
+    sorted_indices = np.argsort(brightness)  # Sort pixels by brightness (dark to light)
+
+    # Sort positions and colors by brightness
+    a_pos = a_pos[sorted_indices]
+    b_pos = b_pos[sorted_indices]
+    a_cols = a_cols[sorted_indices]
+    b_cols = b_cols[sorted_indices]
+
+    for f in range(n_frames):
+        t = f / (n_frames - 1) if n_frames > 1 else 1.0
+        s = ease(t)
+
+        # Calculate movement (falling and rising)
+        darkening_offsets = np.zeros_like(a_pos)
+        lightening_offsets = np.zeros_like(a_pos)
+
+        # For the darkest pixels, move them downward
+        darkening_offsets[:, 1] = (1 - s) * H / pixel_size  # Move downward
+
+        # For the brightest pixels, move them upward
+        lightening_offsets[:, 1] = -(1 - s) * H / pixel_size  # Move upward
+
+        # Blend offsets based on pixel brightness
+        blended_offsets = np.zeros_like(a_pos)
+        midpoint = len(a_pos) // 2  # Rough midpoint to determine separation between dark and light pixels
+        blended_offsets[:midpoint] += darkening_offsets[:midpoint]  # Apply falling to dark pixels
+        blended_offsets[midpoint:] += lightening_offsets[midpoint:]  # Apply rising to bright pixels
+
+        # Combine positions with the offsets and mix into target positions
+        drip_pos = a_pos + blended_offsets
+        pos = (1.0 - s) * drip_pos + s * b_pos
+        cols = (1.0 - s) * a_cols + s * b_cols
+
+        # Render and yield the frame
+        low_frame = render_frame(pos, cols, grid_shape)
+        frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+        logging.debug(f"Generated drip transition frame {f + 1}/{n_frames}")
+        yield frame
+
+    for _ in range(total_hold_frames):
+        yield b_img
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pixel-morph slideshow video generator")
     ap.add_argument("photos_folder", type=Path, help="Folder containing images")
@@ -255,8 +315,9 @@ def main():
                     choices=["linear", "smoothstep", "cubic"])
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--preset", default="medium")
-    ap.add_argument("--transition", default="default",
-                    choices=["default", "swarm", "tornado"], help="Select the type of transition")
+    ap.add_argument("--transition", type=str, default="default",
+                    choices=["default", "swarm", "tornado", "drip"],
+                    help="Select the type of transition")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                     help="Set the log level for the script")
     args = ap.parse_args()
@@ -324,6 +385,8 @@ def main():
                 transition_fn = make_swarm_transition_frames
             elif args.transition == "tornado":
                 transition_fn = make_tornado_transition_frames
+            elif args.transition == "drip":
+                transition_fn = make_drip_transition_frames
             else:
                 transition_fn = make_transition_frames
 
