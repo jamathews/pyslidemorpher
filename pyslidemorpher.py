@@ -191,6 +191,56 @@ def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold
         yield b_img
 
 
+def make_tornado_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
+    """Create a tornado-style transition between a_img and b_img."""
+    total_hold_frames = int(round(hold * fps))
+    logging.debug(f"Generating hold frames: {total_hold_frames}")
+    for _ in range(total_hold_frames):
+        yield a_img
+
+    H, W = a_img.shape[:2]
+    a_low, _ = downsample_for_particles(a_img, pixel_size)
+    b_low, grid_shape = downsample_for_particles(b_img, pixel_size)
+    a_pos, b_pos, a_cols, b_cols, grid_shape = prepare_transition(a_low, b_low, seed=seed)
+
+    n_frames = max(2, int(round(seconds * fps)))
+    ease = easing_fn(ease_name)
+    center = np.array([W / 2.0 / pixel_size, H / 2.0 / pixel_size])  # Center of the tornado
+
+    for f in range(n_frames):
+        t = f / (n_frames - 1) if n_frames > 1 else 1.0
+        s = ease(t)
+
+        # Tornado effect: calculate radii and spiral angles
+        offset_from_center = a_pos - center
+        radii = np.linalg.norm(offset_from_center, axis=1)
+        angles = np.arctan2(offset_from_center[:, 1], offset_from_center[:, 0])
+
+        # Add swirling motion that decreases over time
+        swirliness = (1 - s) * np.pi * 4  # Swirl intensity
+        angles += swirliness
+
+        # Recalculate positions based on spiral motion
+        swirling_offsets = np.column_stack((
+            radii * np.cos(angles),
+            radii * np.sin(angles)
+        ))
+
+        # Combine swirling with final transition position
+        swirly_pos = center + swirling_offsets
+        pos = (1.0 - s) * swirly_pos + s * b_pos
+        cols = (1.0 - s) * a_cols + s * b_cols
+
+        # Render and yield the frame
+        low_frame = render_frame(pos, cols, grid_shape)
+        frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+        logging.debug(f"Generated tornado transition frame {f + 1}/{n_frames}")
+        yield frame
+
+    for _ in range(total_hold_frames):
+        yield b_img
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pixel-morph slideshow video generator")
     ap.add_argument("photos_folder", type=Path, help="Folder containing images")
@@ -206,7 +256,7 @@ def main():
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--preset", default="medium")
     ap.add_argument("--transition", default="default",
-                    choices=["default", "swarm"], help="Select the type of transition")
+                    choices=["default", "swarm", "tornado"], help="Select the type of transition")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                     help="Set the log level for the script")
     args = ap.parse_args()
@@ -272,6 +322,8 @@ def main():
 
             if args.transition == "swarm":
                 transition_fn = make_swarm_transition_frames
+            elif args.transition == "tornado":
+                transition_fn = make_tornado_transition_frames
             else:
                 transition_fn = make_transition_frames
 
