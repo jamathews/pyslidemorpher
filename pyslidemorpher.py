@@ -10,6 +10,7 @@ Dependencies:
 """
 
 import argparse
+import logging
 import random
 import sys
 from pathlib import Path
@@ -31,7 +32,8 @@ def list_images(folder: Path):
     exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
     files = sorted([p for p in folder.iterdir() if p.suffix.lower() in exts])
     if not files:
-        raise SystemExit(f"No images found in: {folder}")
+        logging.error(f"No images found in: {folder}")
+        raise SystemExit(1)
     return files
 
 
@@ -140,24 +142,32 @@ def main():
                     choices=["linear", "smoothstep", "cubic"])
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--preset", default="medium")
+    ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+                    help="Set the log level for the script")
     args = ap.parse_args()
 
+    # Configure logging
+    logging.basicConfig(level=getattr(logging, args.log_level.upper(), None),
+                        format="%(asctime)s - %(levelname)s - %(message)s")
+
+    logging.info("Starting Pixel-Morph Slideshow generator.")
     files = list_images(args.photos_folder)
     W, H = args.size
-    print(f"Found {len(files)} images. Output: {W}x{H} at {args.fps} fps")
+    logging.info(f"Found {len(files)} images. Output: {W}x{H} at {args.fps} fps")
 
     imgs = []
     for p in files:
         img = cv2.imread(str(p), cv2.IMREAD_COLOR)
         if img is None:
-            print(f"Warning: could not read {p}, skipping.", file=sys.stderr)
+            logging.warning(f"Could not read {p}, skipping.")
             continue
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = fit_letterbox(img, (W, H))
         imgs.append(img)
 
     if len(imgs) < 2:
-        raise SystemExit("Need at least 2 readable images.")
+        logging.error("Need at least 2 readable images.")
+        raise SystemExit(1)
 
     writer = imageio.get_writer(
         args.out,
@@ -195,7 +205,7 @@ def main():
     finally:
         writer.close()
 
-    print(f"Done. Wrote: {args.out}")
+    logging.info(f"Done. Wrote: {args.out}")
 
 
 if __name__ == "__main__":
