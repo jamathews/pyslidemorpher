@@ -12,9 +12,8 @@ Dependencies:
 import argparse
 import logging
 import random
-import sys
-from pathlib import Path
 import time  # Add at the top of the file if not already imported
+from pathlib import Path
 
 import cv2
 import imageio  # v2 API for get_writer
@@ -137,7 +136,7 @@ def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease
 
 
 def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
-    """Create a transition where pixels 'swarm' around before settling into the next image."""
+    """Create a transition where pixels 'swarm' like birds before settling into the next image."""
     total_hold_frames = int(round(hold * fps))
     logging.debug(f"Generating hold frames: {total_hold_frames}")
     for _ in range(total_hold_frames):
@@ -150,20 +149,18 @@ def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold
     ease = easing_fn(ease_name)
     H, W = a_img.shape[:2]
 
-    # Random movement vectors for the swarm effect
+    # Random initial velocity and acceleration for the swarm effect
     rng = np.random.default_rng(seed)
-    directions = rng.uniform(-1, 1, size=(len(a_pos), 2))
-    norm_factors = np.linalg.norm(directions, axis=1, keepdims=True)
-    directions /= np.clip(norm_factors, 1e-8, None)  # Normalize directions
+    velocities = rng.uniform(-2, 2, size=(len(a_pos), 2))  # Initial random velocities
+    accelerations = rng.uniform(-0.2, 0.2, size=(len(a_pos), 2))  # Random accelerations
 
     for f in range(n_frames):
         t = f / (n_frames - 1) if n_frames > 1 else 1.0
         s = ease(t)
 
-        # Create a 'swarming' effect by jittering positions
-        jitter_factor = (1 - s) * 20  # Control how spread-out the swarm is
-        swarm_offsets = rng.uniform(-jitter_factor, jitter_factor, size=a_pos.shape)
-        swarming_pos = a_pos + swarm_offsets * directions
+        # Update velocities and positions to mimic a bird swarm effect
+        velocities += accelerations  # Alter velocity by applying acceleration
+        swarming_pos = a_pos + velocities * (1 - s)  # Positions spread based on velocity
 
         # Blend between swarming positions and the final positions
         pos = (1.0 - s) * swarming_pos + s * b_pos
@@ -244,13 +241,13 @@ def main():
     )
 
     try:
+        # Before the loop that processes transitions, create a start time
+        start_time = time.time()
+
         init_hold = int(round(args.hold * args.fps))
         logging.debug(f"Writing initial hold frames: {init_hold}")
         for _ in range(init_hold):
             writer.append_data(imgs[0])
-
-        # Before the loop that processes transitions, create a start time
-        start_time = time.time()
 
         # Update the loop to calculate and log transition times and estimated remaining time
         for i in range(len(imgs) - 1):
