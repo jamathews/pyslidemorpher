@@ -10,13 +10,13 @@ Dependencies:
 """
 
 import argparse
-import os
-from pathlib import Path
 import random
 import sys
-import numpy as np
-import imageio  # v2 API for get_writer
+from pathlib import Path
+
 import cv2
+import imageio  # v2 API for get_writer
+import numpy as np
 
 
 def parse_size(s: str):
@@ -57,9 +57,14 @@ def downsample_for_particles(img, pixel_size):
 
 
 def easing_fn(name):
-    def linear(t): return t
-    def smoothstep(t): return t * t * (3 - 2 * t)
-    def cubic(t): return 4*t*t*t if t < 0.5 else 1 - pow(-2*t + 2, 3)/2
+    def linear(t):
+        return t
+
+    def smoothstep(t):
+        return t * t * (3 - 2 * t)
+
+    def cubic(t):
+        return 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
 
     name = (name or "smoothstep").lower()
     if name == "linear": return linear
@@ -175,18 +180,17 @@ def main():
             a, b = imgs[i], imgs[i + 1]
             pair_seed = (args.seed or 0) + i * 1337
             for frame in make_transition_frames(
-                a, b,
-                pixel_size=args.pixel_size,
-                fps=args.fps,
-                seconds=args.seconds_per_transition,
-                hold=0.0,
-                ease_name=args.easing,
-                seed=pair_seed,
+                    a, b,
+                    pixel_size=args.pixel_size,
+                    fps=args.fps,
+                    seconds=args.seconds_per_transition,
+                    hold=0.0,
+                    ease_name=args.easing,
+                    seed=pair_seed,
             ):
                 writer.append_data(frame)
-
-        for _ in range(init_hold):
-            writer.append_data(imgs[-1])
+            for _ in range(init_hold):
+                writer.append_data(b)
 
     finally:
         writer.close()
