@@ -349,7 +349,7 @@ def make_rainfall_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, h
 
 def make_sorted_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
     """
-    Create a transition where pixels are gradually sorted by luminosity, starting from a_img,
+     Create a transition where pixels are gradually sorted by luminosity, starting from a_img,
     through intermediate sorting stages for both a_img and b_img, and ending with an unmodified b_img.
     """
     total_hold_frames = int(round(hold * fps))
@@ -497,7 +497,7 @@ def main():
         for i in range(len(imgs) - 1):
             logging.info(f"Processing transition {i + 1}/{len(imgs) - 1}")
             a, b = imgs[i], imgs[i + 1]
-            pair_seed = (args.seed or 0) + i * 1337
+            pair_seed = (args.seed or 0) + i * random.randint(1, 10000)
 
             if args.transition == "swarm":
                 transition_fn = make_swarm_transition_frames
