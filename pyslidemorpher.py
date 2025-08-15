@@ -135,6 +135,49 @@ def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease
         yield b_img
 
 
+def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
+    """Create a transition where pixels 'swarm' around before settling into the next image."""
+    total_hold_frames = int(round(hold * fps))
+    logging.debug(f"Generating hold frames: {total_hold_frames}")
+    for _ in range(total_hold_frames):
+        yield a_img
+
+    a_low, _ = downsample_for_particles(a_img, pixel_size)
+    b_low, grid_shape = downsample_for_particles(b_img, pixel_size)
+    a_pos, b_pos, a_cols, b_cols, grid_shape = prepare_transition(a_low, b_low, seed=seed)
+    n_frames = max(2, int(round(seconds * fps)))
+    ease = easing_fn(ease_name)
+    H, W = a_img.shape[:2]
+
+    # Random movement vectors for the swarm effect
+    rng = np.random.default_rng(seed)
+    directions = rng.uniform(-1, 1, size=(len(a_pos), 2))
+    norm_factors = np.linalg.norm(directions, axis=1, keepdims=True)
+    directions /= np.clip(norm_factors, 1e-8, None)  # Normalize directions
+
+    for f in range(n_frames):
+        t = f / (n_frames - 1) if n_frames > 1 else 1.0
+        s = ease(t)
+
+        # Create a 'swarming' effect by jittering positions
+        jitter_factor = (1 - s) * 20  # Control how spread-out the swarm is
+        swarm_offsets = rng.uniform(-jitter_factor, jitter_factor, size=a_pos.shape)
+        swarming_pos = a_pos + swarm_offsets * directions
+
+        # Blend between swarming positions and the final positions
+        pos = (1.0 - s) * swarming_pos + s * b_pos
+        cols = (1.0 - s) * a_cols + s * b_cols
+
+        # Render frame
+        low_frame = render_frame(pos, cols, grid_shape)
+        frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+        logging.debug(f"Generated swarm transition frame {f + 1}/{n_frames}")
+        yield frame
+
+    for _ in range(total_hold_frames):
+        yield b_img
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pixel-morph slideshow video generator")
     ap.add_argument("photos_folder", type=Path, help="Folder containing images")
@@ -149,6 +192,8 @@ def main():
                     choices=["linear", "smoothstep", "cubic"])
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--preset", default="medium")
+    ap.add_argument("--transition", default="default",
+                    choices=["default", "swarm"], help="Select the type of transition")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                     help="Set the log level for the script")
     args = ap.parse_args()
@@ -162,7 +207,7 @@ def main():
         args.out = (f"slideshow_{args.size[0]}x{args.size[1]}_{args.fps}fps_"
                     f"{args.pixel_size}px_{args.seconds_per_transition}s_"
                     f"{args.hold}hold_{args.easing}_"
-                    f"{args.preset}.mp4")
+                    f"{args.transition}_{args.preset}.mp4")
         logging.info(f"No --out specified. Using default filename: {args.out}")
 
     logging.info("Starting Pixel-Morph Slideshow generator.")
@@ -207,7 +252,13 @@ def main():
             logging.info(f"Processing transition {i + 1}/{len(imgs) - 1}")
             a, b = imgs[i], imgs[i + 1]
             pair_seed = (args.seed or 0) + i * 1337
-            for frame in make_transition_frames(
+
+            if args.transition == "swarm":
+                transition_fn = make_swarm_transition_frames
+            else:
+                transition_fn = make_transition_frames
+
+            for frame in transition_fn(
                     a, b,
                     pixel_size=args.pixel_size,
                     fps=args.fps,
