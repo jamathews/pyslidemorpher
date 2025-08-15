@@ -301,6 +301,52 @@ def make_drip_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold,
         yield b_img
 
 
+def make_rainfall_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
+    """
+    Create a transition where b_img falls from above, replacing pixels of a_img until frame fills with b_img.
+    """
+    total_hold_frames = int(round(hold * fps))
+    logging.debug(f"Generating hold frames: {total_hold_frames}")
+    for _ in range(total_hold_frames):
+        yield a_img
+
+    H, W = a_img.shape[:2]
+    a_low, _ = downsample_for_particles(a_img, pixel_size)
+    b_low, grid_shape = downsample_for_particles(b_img, pixel_size)
+    _, b_pos, _, b_cols, grid_shape = prepare_transition(a_low, b_low, seed=seed)
+
+    n_frames = max(2, int(round(seconds * fps)))
+    ease = easing_fn(ease_name)
+
+    # Begin with b_img pixels above the frame
+    initial_y_offset = -H // pixel_size
+    b_pos[:, 1] += initial_y_offset  # Shift all starting b_img pixels above the top of the frame
+
+    for f in range(n_frames):
+        t = f / (n_frames - 1) if n_frames > 1 else 1.0
+        s = ease(t)
+
+        # Blend a_img and b_img pixels based on vertical falling progress
+        current_b_pos = b_pos.copy()
+        current_b_pos[:, 1] += s * H / pixel_size  # Bring b_img pixels down into the frame
+
+        # Composite b_img pixels over a_img pixels
+        mask = current_b_pos[:, 1] >= 0  # Only render b_img pixels once they "enter" the visible frame
+
+        pos = np.where(mask[:, None], current_b_pos, b_pos)  # Use b_pos only if b_img hasn't entered
+        cols = np.where(mask[:, None], b_cols, a_low.reshape(-1, 3))  # Blend colors of a_img and b_img
+
+        # Prepare and render the frame
+        low_frame = render_frame(pos, cols, grid_shape)
+        frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+        logging.debug(f"Generated rainfall transition frame {f + 1}/{n_frames}")
+        yield frame
+
+    # Final hold frames with b_img unmodified
+    for _ in range(total_hold_frames):
+        yield b_img
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pixel-morph slideshow video generator")
     ap.add_argument("photos_folder", type=Path, help="Folder containing images")
@@ -316,7 +362,7 @@ def main():
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--preset", default="medium")
     ap.add_argument("--transition", type=str, default="default",
-                    choices=["default", "swarm", "tornado", "drip"],
+                    choices=["default", "swarm", "tornado", "drip", "rain"],
                     help="Select the type of transition")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                     help="Set the log level for the script")
@@ -349,6 +395,7 @@ def main():
         img = fit_letterbox(img, (W, H))
         logging.debug(f"Processed image {idx + 1}/{len(files)}: {p.name}")
         imgs.append(img)
+    imgs.append(imgs[0])  # Append the first image to the end to create a loop
 
     if len(imgs) < 2:
         logging.error("Need at least 2 readable images.")
@@ -372,7 +419,7 @@ def main():
 
         init_hold = int(round(args.hold * args.fps))
         logging.debug(f"Writing initial hold frames: {init_hold}")
-        for _ in range(init_hold):
+        for _ in range(init_hold // 4):
             writer.append_data(imgs[0])
 
         # Update the loop to calculate and log transition times and estimated remaining time
@@ -387,6 +434,8 @@ def main():
                 transition_fn = make_tornado_transition_frames
             elif args.transition == "drip":
                 transition_fn = make_drip_transition_frames
+            elif args.transition == "rain":
+                transition_fn = make_rainfall_transition_frames
             else:
                 transition_fn = make_transition_frames
 
@@ -416,7 +465,7 @@ def main():
                          f"in {elapsed_time:.2f} seconds. Estimated remaining time: "
                          f"{estimated_remaining_time:.2f} seconds.")
 
-            for _ in range(init_hold):
+            for _ in range(init_hold // 4):
                 writer.append_data(b)
 
     finally:
