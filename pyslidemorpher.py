@@ -418,6 +418,81 @@ def make_sorted_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hol
         yield b_img
 
 
+def make_hue_sorted_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
+    """
+    Create a transition where pixels are gradually sorted by hue instead of luminosity, starting from a_img,
+    through intermediate sorting stages for both a_img and b_img, and ending with an unmodified b_img.
+    """
+    total_hold_frames = int(round(hold * fps))
+    logging.debug(f"Generating hold frames: {total_hold_frames}")
+    for _ in range(total_hold_frames):
+        yield a_img
+
+    H, W = a_img.shape[:2]
+    a_low, _ = downsample_for_particles(a_img, pixel_size)
+    b_low, grid_shape = downsample_for_particles(b_img, pixel_size)
+
+    # Prepare transitions based on pixel positions and colors
+    a_pos, b_pos, a_cols, b_cols, grid_shape = prepare_transition(a_low, b_low, seed=seed)
+
+    # Convert colors to HSV format for hue calculation
+    a_hsv = cv2.cvtColor(a_cols.reshape(-1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2HSV).reshape(-1, 3)
+    b_hsv = cv2.cvtColor(b_cols.reshape(-1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2HSV).reshape(-1, 3)
+
+    # Extract the hue channel for sorting
+    a_hue = a_hsv[:, 0].astype(np.float32)  # Hue of a_img
+    b_hue = b_hsv[:, 0].astype(np.float32)  # Hue of b_img
+
+    # Sort all pixels by hue (independently for a_img and b_img)
+    a_sorted_indices = np.argsort(a_hue)
+    b_sorted_indices = np.argsort(b_hue)
+
+    a_pos_sorted = a_pos[a_sorted_indices]
+    a_cols_sorted = a_cols[a_sorted_indices]
+    b_pos_sorted = b_pos[b_sorted_indices]
+    b_cols_sorted = b_cols[b_sorted_indices]
+
+    n_frames = max(2, int(round(seconds * fps)))
+    ease = easing_fn(ease_name)
+
+    for f in range(n_frames):
+        t = f / (n_frames - 1) if n_frames > 1 else 1.0
+        s = ease(t)
+
+        # Intermediate sorting progress
+        sorted_fraction = int(s * len(a_pos))  # Fraction of pixels to sort at the current frame
+
+        # Gradually sort a_img pixels
+        a_current_indices = np.concatenate([
+            a_sorted_indices[:sorted_fraction],  # Sorted pixels
+            a_sorted_indices[sorted_fraction:]  # Unsorted pixels
+        ])
+        a_pos_intermediate = a_pos[a_current_indices]
+        a_cols_intermediate = a_cols[a_current_indices]
+
+        # Gradually sort b_img pixels
+        b_current_indices = np.concatenate([
+            b_sorted_indices[:sorted_fraction],  # Sorted pixels
+            b_sorted_indices[sorted_fraction:]  # Unsorted pixels
+        ])
+        b_pos_intermediate = b_pos[b_current_indices]
+        b_cols_intermediate = b_cols[b_current_indices]
+
+        # Interpolate between a_img and b_img during transition
+        pos = (1.0 - s) * a_pos_intermediate + s * b_pos_intermediate
+        cols = (1.0 - s) * a_cols_intermediate + s * b_cols_intermediate
+
+        # Render and resize frame
+        low_frame = render_frame(pos, cols, grid_shape)
+        frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+        logging.debug(f"Generated intermediate hue-sorted transition frame {f + 1}/{n_frames}")
+        yield frame
+
+    # Final hold frames with b_img unmodified
+    for _ in range(total_hold_frames):
+        yield b_img
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pixel-morph slideshow video generator")
     ap.add_argument("photos_folder", type=Path, help="Folder containing images")
@@ -433,7 +508,7 @@ def main():
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--preset", default="medium")
     ap.add_argument("--transition", type=str, default="default",
-                    choices=["default", "swarm", "tornado", "drip", "rain", "sorted"],
+                    choices=["default", "swarm", "tornado", "drip", "rain", "sorted", "hue-sorted"],
                     help="Select the type of transition")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                     help="Set the log level for the script")
@@ -509,6 +584,8 @@ def main():
                 transition_fn = make_rainfall_transition_frames
             elif args.transition == "sorted":
                 transition_fn = make_sorted_transition_frames
+            elif args.transition == "hue-sorted":
+                transition_fn = make_hue_sorted_transition_frames
             else:
                 transition_fn = make_transition_frames
 
