@@ -349,8 +349,8 @@ def make_rainfall_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, h
 
 def make_sorted_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
     """
-    Create a transition where pixels are sorted by luminosity, starting from a_img, transitioning
-    through sorted pixels of a_img to sorted pixels of b_img, and ending with an unmodified b_img.
+    Create a transition where pixels are gradually sorted by luminosity, starting from a_img,
+    through intermediate sorting stages for both a_img and b_img, and ending with an unmodified b_img.
     """
     total_hold_frames = int(round(hold * fps))
     logging.debug(f"Generating hold frames: {total_hold_frames}")
@@ -384,25 +384,33 @@ def make_sorted_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hol
         t = f / (n_frames - 1) if n_frames > 1 else 1.0
         s = ease(t)
 
-        # Transition phases: 
-        # First progresses from a_img to sorted a_img, 
-        # then from sorted a_img to sorted b_img, 
-        # finally sorted b_img dissolves into b_img.
-        if s < 0.5:
-            # Normalize s for this phase
-            norm_s = s * 2
-            pos = (1.0 - norm_s) * a_pos + norm_s * a_pos_sorted
-            cols = (1.0 - norm_s) * a_cols + norm_s * a_cols_sorted
-        else:
-            # Normalize s for this phase
-            norm_s = (s - 0.5) * 2
-            pos = (1.0 - norm_s) * a_pos_sorted + norm_s * b_pos_sorted
-            cols = (1.0 - norm_s) * a_cols_sorted + norm_s * b_cols_sorted
+        # Intermediate sorting progress
+        sorted_fraction = int(s * len(a_pos))  # Fraction of pixels to sort at the current frame
+
+        # Gradually sort a_img pixels
+        a_current_indices = np.concatenate([
+            a_sorted_indices[:sorted_fraction],  # Sorted pixels
+            a_sorted_indices[sorted_fraction:]  # Unsorted pixels
+        ])
+        a_pos_intermediate = a_pos[a_current_indices]
+        a_cols_intermediate = a_cols[a_current_indices]
+
+        # Gradually sort b_img pixels
+        b_current_indices = np.concatenate([
+            b_sorted_indices[:sorted_fraction],  # Sorted pixels
+            b_sorted_indices[sorted_fraction:]  # Unsorted pixels
+        ])
+        b_pos_intermediate = b_pos[b_current_indices]
+        b_cols_intermediate = b_cols[b_current_indices]
+
+        # Interpolate between a_img and b_img during transition
+        pos = (1.0 - s) * a_pos_intermediate + s * b_pos_intermediate
+        cols = (1.0 - s) * a_cols_intermediate + s * b_cols_intermediate
 
         # Render and resize frame
         low_frame = render_frame(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
-        logging.debug(f"Generated sorted transition frame {f + 1}/{n_frames}")
+        logging.debug(f"Generated intermediate sorted transition frame {f + 1}/{n_frames}")
         yield frame
 
     # Final hold frames with b_img unmodified
