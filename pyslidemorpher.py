@@ -136,7 +136,7 @@ def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease
 
 
 def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
-    """Create a transition where pixels 'swarm' like birds before settling into the next image."""
+    """Create a transition where pixels 'swarm' intensely like birds before settling into the next image."""
     total_hold_frames = int(round(hold * fps))
     logging.debug(f"Generating hold frames: {total_hold_frames}")
     for _ in range(total_hold_frames):
@@ -149,18 +149,33 @@ def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold
     ease = easing_fn(ease_name)
     H, W = a_img.shape[:2]
 
-    # Random initial velocity and acceleration for the swarm effect
+    # Increase randomness to exaggerate the swarming effect
     rng = np.random.default_rng(seed)
-    velocities = rng.uniform(-2, 2, size=(len(a_pos), 2))  # Initial random velocities
-    accelerations = rng.uniform(-0.2, 0.2, size=(len(a_pos), 2))  # Random accelerations
+    velocities = rng.uniform(-4, 4, size=(len(a_pos), 2))  # Faster initial random velocities
+    accelerations = rng.uniform(-0.5, 0.5, size=(len(a_pos), 2))  # Larger random accelerations
 
     for f in range(n_frames):
         t = f / (n_frames - 1) if n_frames > 1 else 1.0
         s = ease(t)
 
-        # Update velocities and positions to mimic a bird swarm effect
-        velocities += accelerations  # Alter velocity by applying acceleration
-        swarming_pos = a_pos + velocities * (1 - s)  # Positions spread based on velocity
+        # Update velocities and positions
+        velocities += accelerations * (1 - s)  # Amplify acceleration effects as the transition begins
+        velocities = np.clip(velocities, -6, 6)  # Cap velocity magnitudes for stability
+        swarming_pos = a_pos + velocities * (1 - s) * 4  # Scale velocity effect for exaggerated swarming
+
+        # Introduce a swirling motion
+        angles = rng.uniform(0, 2 * np.pi, size=(len(a_pos),))  # Random rotation angles
+        cos_angles = np.cos(angles)
+        sin_angles = np.sin(angles)
+
+        # Create a rotation matrix for each particle
+        swirling_offsets = np.column_stack((
+            velocities[:, 0] * cos_angles - velocities[:, 1] * sin_angles,
+            velocities[:, 0] * sin_angles + velocities[:, 1] * cos_angles
+        )) * (1 - s)
+
+        # Combine swirling and swarming movements
+        swarming_pos += swirling_offsets
 
         # Blend between swarming positions and the final positions
         pos = (1.0 - s) * swarming_pos + s * b_pos
@@ -169,7 +184,7 @@ def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold
         # Render frame
         low_frame = render_frame(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
-        logging.debug(f"Generated swarm transition frame {f + 1}/{n_frames}")
+        logging.debug(f"Generated intensified swarm transition frame {f + 1}/{n_frames}")
         yield frame
 
     for _ in range(total_hold_frames):
