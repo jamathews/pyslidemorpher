@@ -34,6 +34,7 @@ def list_images(folder: Path):
     if not files:
         logging.error(f"No images found in: {folder}")
         raise SystemExit(1)
+    logging.debug(f"Found {len(files)} valid images in folder: {folder}")
     return files
 
 
@@ -48,6 +49,7 @@ def fit_letterbox(img, out_wh):
     x0 = (out_w - new_w) // 2
     y0 = (out_h - new_h) // 2
     canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
+    logging.debug(f"Image resized to fit letterbox of {out_wh}, new size: {new_w}x{new_h}")
     return canvas
 
 
@@ -55,6 +57,7 @@ def downsample_for_particles(img, pixel_size):
     H, W = img.shape[:2]
     lw, lh = W // pixel_size, H // pixel_size
     low = cv2.resize(img, (lw, lh), interpolation=cv2.INTER_AREA)
+    logging.debug(f"Downsampled image for particles with pixel size {pixel_size}, new dimensions: {lw}x{lh}")
     return low, (lh, lw)
 
 
@@ -89,6 +92,7 @@ def prepare_transition(a_low, b_low, seed=None):
     perm = np.array(perm, dtype=np.int32)
     src_idx = perm
     tgt_idx = np.arange(n)
+    logging.debug(f"Transition prepared with grid_shape: {lh}x{lw}, seed: {seed}")
     return a_pos[src_idx], b_pos[tgt_idx], a_cols[src_idx], b_cols[tgt_idx], (lh, lw)
 
 
@@ -100,11 +104,13 @@ def render_frame(pos, cols, grid_shape):
     np.clip(yi, 0, lh - 1, out=yi)
     canvas = np.zeros((lh, lw, 3), dtype=np.float32)
     canvas[yi, xi] = cols
+    logging.debug("Rendered a single frame")
     return canvas.clip(0, 255).astype(np.uint8)
 
 
 def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
     total_hold_frames = int(round(hold * fps))
+    logging.debug(f"Generating hold frames: {total_hold_frames}")
     for _ in range(total_hold_frames):
         yield a_img
 
@@ -122,6 +128,7 @@ def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease
         cols = (1.0 - s) * a_cols + s * b_cols
         low_frame = render_frame(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+        logging.debug(f"Generated transition frame {f + 1}/{n_frames}")
         yield frame
 
     for _ in range(total_hold_frames):
@@ -156,13 +163,14 @@ def main():
     logging.info(f"Found {len(files)} images. Output: {W}x{H} at {args.fps} fps")
 
     imgs = []
-    for p in files:
+    for idx, p in enumerate(files):
         img = cv2.imread(str(p), cv2.IMREAD_COLOR)
         if img is None:
             logging.warning(f"Could not read {p}, skipping.")
             continue
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = fit_letterbox(img, (W, H))
+        logging.debug(f"Processed image {idx + 1}/{len(files)}: {p.name}")
         imgs.append(img)
 
     if len(imgs) < 2:
@@ -183,10 +191,12 @@ def main():
 
     try:
         init_hold = int(round(args.hold * args.fps))
+        logging.debug(f"Writing initial hold frames: {init_hold}")
         for _ in range(init_hold):
             writer.append_data(imgs[0])
 
         for i in range(len(imgs) - 1):
+            logging.info(f"Processing transition {i + 1}/{len(imgs) - 1}")
             a, b = imgs[i], imgs[i + 1]
             pair_seed = (args.seed or 0) + i * 1337
             for frame in make_transition_frames(
@@ -199,6 +209,7 @@ def main():
                     seed=pair_seed,
             ):
                 writer.append_data(frame)
+            logging.debug(f"Finished transition {i + 1}/{len(imgs) - 1}")
             for _ in range(init_hold):
                 writer.append_data(b)
 
