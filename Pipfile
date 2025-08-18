@@ -4,9 +4,8 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-numpy = "*"
-pillow = "*"
 opencv-python = "*"
+imageio = {extras = ["ffmpeg"], version = "*"}
 
 [dev-packages]
 
