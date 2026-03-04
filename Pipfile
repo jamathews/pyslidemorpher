@@ -6,6 +6,8 @@ name = "pypi"
 [packages]
 opencv-python = "*"
 imageio = {extras = ["ffmpeg"], version = "*"}
+torch = "*"
+torchvision = "*"
 
 [dev-packages]
 

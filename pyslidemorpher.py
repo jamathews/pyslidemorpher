@@ -22,6 +22,25 @@ import cv2
 import imageio  # v2 API for get_writer
 import numpy as np
 
+# PyTorch imports for GPU acceleration
+try:
+    import torch
+    import torch.nn.functional as F
+    PYTORCH_AVAILABLE = True
+    # Check for CUDA availability
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        logging.info(f"PyTorch GPU acceleration available on {torch.cuda.get_device_name()}")
+    else:
+        logging.info("PyTorch CPU acceleration available")
+except ImportError:
+    PYTORCH_AVAILABLE = False
+    DEVICE = None
+    logging.info("PyTorch not available, using NumPy/OpenCV only")
+
+# Global variable to control PyTorch usage
+USE_PYTORCH = False
+
 
 def parse_size(s: str):
     try:
@@ -100,6 +119,7 @@ def prepare_transition(a_low, b_low, seed=None):
 
 
 def render_frame(pos, cols, grid_shape):
+    """Render frame using NumPy (fallback implementation)."""
     lh, lw = grid_shape
     xi = np.rint(pos[:, 0]).astype(np.int32)
     yi = np.rint(pos[:, 1]).astype(np.int32)
@@ -107,8 +127,48 @@ def render_frame(pos, cols, grid_shape):
     np.clip(yi, 0, lh - 1, out=yi)
     canvas = np.zeros((lh, lw, 3), dtype=np.float32)
     canvas[yi, xi] = cols
-    logging.debug("Rendered a single frame")
+    logging.debug("Rendered a single frame (NumPy)")
     return canvas.clip(0, 255).astype(np.uint8)
+
+
+def render_frame_torch(pos, cols, grid_shape):
+    """Render frame using PyTorch with GPU acceleration."""
+    if not PYTORCH_AVAILABLE:
+        return render_frame(pos, cols, grid_shape)
+
+    lh, lw = grid_shape
+
+    # Convert to PyTorch tensors with consistent dtypes and move to GPU
+    pos_tensor = torch.from_numpy(pos.astype(np.float32)).to(DEVICE)
+    cols_tensor = torch.from_numpy(cols.astype(np.float32)).to(DEVICE)
+
+    # Round and clamp positions
+    xi = torch.round(pos_tensor[:, 0]).long()
+    yi = torch.round(pos_tensor[:, 1]).long()
+    xi = torch.clamp(xi, 0, lw - 1)
+    yi = torch.clamp(yi, 0, lh - 1)
+
+    # Create canvas on GPU
+    canvas = torch.zeros((lh, lw, 3), dtype=torch.float32, device=DEVICE)
+
+    # Use advanced indexing to set pixel values
+    canvas[yi, xi] = cols_tensor
+
+    # Clamp values and convert back to numpy
+    canvas = torch.clamp(canvas, 0, 255)
+    result = canvas.cpu().numpy().astype(np.uint8)
+
+    logging.debug("Rendered a single frame (PyTorch GPU)")
+    return result
+
+
+def render_frame_optimized(pos, cols, grid_shape):
+    """Choose the best rendering method based on availability and user preference."""
+    global USE_PYTORCH
+    if PYTORCH_AVAILABLE and USE_PYTORCH and len(pos) > 100:  # Use PyTorch if requested and available
+        return render_frame_torch(pos, cols, grid_shape)
+    else:
+        return render_frame(pos, cols, grid_shape)
 
 
 def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
@@ -129,7 +189,7 @@ def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease
         s = ease(t)
         pos = (1.0 - s) * a_pos + s * b_pos
         cols = (1.0 - s) * a_cols + s * b_cols
-        low_frame = render_frame(pos, cols, grid_shape)
+        low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
         logging.debug(f"Generated transition frame {f + 1}/{n_frames}")
         yield frame
@@ -185,7 +245,7 @@ def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold
         cols = (1.0 - s) * a_cols + s * b_cols
 
         # Render frame
-        low_frame = render_frame(pos, cols, grid_shape)
+        low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
         logging.debug(f"Generated intensified swarm transition frame {f + 1}/{n_frames}")
         yield frame
@@ -235,7 +295,7 @@ def make_tornado_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, ho
         cols = (1.0 - s) * a_cols + s * b_cols
 
         # Render and yield the frame
-        low_frame = render_frame(pos, cols, grid_shape)
+        low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
         logging.debug(f"Generated tornado transition frame {f + 1}/{n_frames}")
         yield frame
@@ -295,7 +355,7 @@ def make_drip_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold,
         cols = (1.0 - s) * a_cols + s * b_cols
 
         # Render and yield the frame
-        low_frame = render_frame(pos, cols, grid_shape)
+        low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
         logging.debug(f"Generated drip transition frame {f + 1}/{n_frames}")
         yield frame
@@ -340,7 +400,7 @@ def make_rainfall_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, h
         cols = np.where(mask[:, None], b_cols, a_low.reshape(-1, 3))  # Blend colors of a_img and b_img
 
         # Prepare and render the frame
-        low_frame = render_frame(pos, cols, grid_shape)
+        low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
         logging.debug(f"Generated rainfall transition frame {f + 1}/{n_frames}")
         yield frame
@@ -411,7 +471,7 @@ def make_sorted_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hol
         cols = (1.0 - s) * a_cols_intermediate + s * b_cols_intermediate
 
         # Render and resize frame
-        low_frame = render_frame(pos, cols, grid_shape)
+        low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
         logging.debug(f"Generated intermediate sorted transition frame {f + 1}/{n_frames}")
         yield frame
@@ -486,7 +546,7 @@ def make_hue_sorted_transition_frames(a_img, b_img, *, pixel_size, fps, seconds,
         cols = (1.0 - s) * a_cols_intermediate + s * b_cols_intermediate
 
         # Render and resize frame
-        low_frame = render_frame(pos, cols, grid_shape)
+        low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
         logging.debug(f"Generated intermediate hue-sorted transition frame {f + 1}/{n_frames}")
         yield frame
@@ -668,6 +728,8 @@ def main():
                     help="Select the type of transition")
     ap.add_argument("--realtime", action="store_true",
                     help="Play slideshow in realtime instead of writing to file")
+    ap.add_argument("--use-pytorch", action="store_true",
+                    help="Enable PyTorch GPU acceleration (requires PyTorch installation)")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                     help="Set the log level for the script")
     args = ap.parse_args()
@@ -675,6 +737,15 @@ def main():
     # Configure logging
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), None),
                         format="%(asctime)s - %(levelname)s - %(message)s")
+
+    # Set PyTorch usage based on command-line argument
+    global USE_PYTORCH
+    USE_PYTORCH = args.use_pytorch
+    if USE_PYTORCH and PYTORCH_AVAILABLE:
+        logging.info(f"PyTorch acceleration enabled (using {DEVICE})")
+    elif USE_PYTORCH and not PYTORCH_AVAILABLE:
+        logging.warning("PyTorch acceleration requested but PyTorch is not available")
+        USE_PYTORCH = False
 
     # Construct default filename if --out is not specified and not in realtime mode
     if not args.realtime and args.out is None:
