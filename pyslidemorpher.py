@@ -594,7 +594,10 @@ def play_realtime(imgs, args):
                 pair_seed = (args.seed or 0) + i * random.randint(1, 10000)
 
                 # Select transition function
-                if args.transition == "swarm":
+                if args.transition == "random":
+                    transition_fn = get_random_transition_function()
+                    logging.debug(f"Randomly selected transition: {transition_fn.__name__}")
+                elif args.transition == "swarm":
                     transition_fn = make_swarm_transition_frames
                 elif args.transition == "tornado":
                     transition_fn = make_tornado_transition_frames
@@ -709,6 +712,43 @@ def play_realtime(imgs, args):
         logging.info("Realtime playback ended.")
 
 
+def get_random_transition_function():
+    """Randomly select a transition function from available options.
+
+    Ensures that the same transition function is never selected twice in a row.
+    """
+    transition_functions = [
+        make_transition_frames,        # default
+        make_swarm_transition_frames,  # swarm
+        make_tornado_transition_frames, # tornado
+        make_drip_transition_frames,   # drip
+        make_rainfall_transition_frames, # rain
+        make_sorted_transition_frames, # sorted
+        make_hue_sorted_transition_frames, # hue-sorted
+    ]
+
+    # Initialize the last selected function attribute if it doesn't exist
+    if not hasattr(get_random_transition_function, '_last_selected'):
+        get_random_transition_function._last_selected = None
+
+    # If this is the first call or there's only one function, just return a random choice
+    if get_random_transition_function._last_selected is None or len(transition_functions) <= 1:
+        selected = random.choice(transition_functions)
+        get_random_transition_function._last_selected = selected
+        logging.critical(f"Randomly selected transition function: {selected.__name__}")
+        return selected
+
+    # Create a list of available functions excluding the last selected one
+    available_functions = [func for func in transition_functions 
+                          if func != get_random_transition_function._last_selected]
+
+    # Select from the available functions
+    selected = random.choice(available_functions)
+    get_random_transition_function._last_selected = selected
+    logging.critical(f"Randomly selected transition function: {selected.__name__}")
+    return selected
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pixel-morph slideshow video generator")
     ap.add_argument("photos_folder", type=Path, help="Folder containing images")
@@ -724,8 +764,8 @@ def main():
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--preset", default="medium")
     ap.add_argument("--transition", type=str, default="default",
-                    choices=["default", "swarm", "tornado", "drip", "rain", "sorted", "hue-sorted"],
-                    help="Select the type of transition")
+                    choices=["default", "swarm", "tornado", "drip", "rain", "sorted", "hue-sorted", "random"],
+                    help="Select the type of transition. Use 'random' to randomly choose a different transition for each frame transition.")
     ap.add_argument("--realtime", action="store_true",
                     help="Play slideshow in realtime instead of writing to file")
     ap.add_argument("--use-pytorch", action="store_true",
@@ -812,7 +852,10 @@ def main():
             a, b = imgs[i], imgs[i + 1]
             pair_seed = (args.seed or 0) + i * random.randint(1, 10000)
 
-            if args.transition == "swarm":
+            if args.transition == "random":
+                transition_fn = get_random_transition_function()
+                logging.debug(f"Randomly selected transition: {transition_fn.__name__}")
+            elif args.transition == "swarm":
                 transition_fn = make_swarm_transition_frames
             elif args.transition == "tornado":
                 transition_fn = make_tornado_transition_frames
