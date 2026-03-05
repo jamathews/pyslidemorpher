@@ -114,6 +114,28 @@ def play_realtime(imgs, args):
     elif hasattr(args, 'web_gui') and args.web_gui and not WEB_GUI_AVAILABLE:
         logging.error("Web GUI requested but Flask is not available. Install Flask to use web GUI.")
 
+    def get_current_settings():
+        """Get current settings from web controller or fallback to args."""
+        if web_controller:
+            settings = web_controller.get_settings()
+            # Create a namespace object similar to args for compatibility
+            class SettingsNamespace:
+                def __init__(self, settings_dict, original_args):
+                    # Copy all original args first
+                    for key, value in vars(original_args).items():
+                        setattr(self, key, value)
+                    # Override with web controller settings
+                    self.fps = settings_dict['fps']
+                    self.seconds_per_transition = settings_dict['seconds_per_transition']
+                    self.hold = settings_dict['hold']
+                    self.pixel_size = settings_dict['pixel_size']
+                    self.transition = settings_dict['transition']
+                    self.easing = settings_dict['easing']
+                    self.audio_threshold = settings_dict['audio_threshold']
+                    self.reactive = settings_dict['reactive']
+            return SettingsNamespace(settings, args)
+        return args
+
     # Log realtime mode start at WARNING level so it's always visible
     logging.warning(f"Starting realtime slideshow with {len(imgs)-1} images at {args.fps} fps ({W}x{H})")
 
@@ -251,8 +273,14 @@ def play_realtime(imgs, args):
     def audio_monitor():
         """Monitor audio features in a separate thread."""
         nonlocal audio_features
-        while audio_initialized and args.reactive:
+        while audio_initialized:
             try:
+                # Check current settings to see if reactive mode is still enabled
+                current_settings = get_current_settings()
+                if not current_settings.reactive:
+                    time.sleep(0.1)  # Sleep longer when not in reactive mode
+                    continue
+
                 features = get_audio_intensity()
                 with audio_features_lock:
                     audio_features = features
@@ -276,8 +304,11 @@ def play_realtime(imgs, args):
 
     def standard_frame_generator():
         """Standard time-based frame generation."""
+        # Get current settings (may be updated from web GUI)
+        current_settings = get_current_settings()
+
         # Initial hold frames
-        init_hold = int(round(args.hold * args.fps))
+        init_hold = int(round(current_settings.hold * current_settings.fps))
         logging.debug(f"Displaying initial hold frames: {init_hold}")
         for _ in range(init_hold // 4):
             # Convert RGB to BGR for OpenCV display
@@ -286,32 +317,37 @@ def play_realtime(imgs, args):
 
         # Process transitions
         for i in range(len(imgs) - 1):
+            # Get fresh settings for each transition to allow real-time updates
+            current_settings = get_current_settings()
+
             logging.info(f"Processing transition {i + 1}/{len(imgs) - 1}")
             a, b = imgs[i], imgs[i + 1]
-            pair_seed = (args.seed or 0) + i * random.randint(1, 10000)
+            pair_seed = (current_settings.seed or 0) + i * random.randint(1, 10000)
 
             # Select transition function (moved inside loop for random transitions)
-            transition_fn = get_transition_function(args.transition)
+            transition_fn = get_transition_function(current_settings.transition)
 
             # Log which transition is being used for this image pair
             logging.critical(f"Using transition: {transition_fn.__name__}")
 
-            # Generate transition frames
+            # Generate transition frames with current settings
             for frame in transition_fn(
                     a, b,
-                    pixel_size=args.pixel_size,
-                    fps=args.fps,
-                    seconds=args.seconds_per_transition,
+                    pixel_size=current_settings.pixel_size,
+                    fps=current_settings.fps,
+                    seconds=current_settings.seconds_per_transition,
                     hold=0.0,
-                    ease_name=args.easing,
+                    ease_name=current_settings.easing,
                     seed=pair_seed,
             ):
                 # Convert RGB to BGR for OpenCV display
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 frame_buffer.put(frame_bgr)
 
-            # Hold frames
-            for _ in range(init_hold // 4):
+            # Hold frames with current settings
+            current_settings = get_current_settings()  # Refresh again for hold duration
+            updated_hold = int(round(current_settings.hold * current_settings.fps))
+            for _ in range(updated_hold // 4):
                 frame_bgr = cv2.cvtColor(b, cv2.COLOR_RGB2BGR)
                 frame_buffer.put(frame_bgr)
 
@@ -336,10 +372,16 @@ def play_realtime(imgs, args):
 
         # Put initial frame
         frame_buffer.put(current_frame_bgr)
-        logging.info(f"Enhanced reactive mode started. Audio threshold: {args.audio_threshold}")
+
+        # Get initial settings
+        current_settings = get_current_settings()
+        logging.info(f"Enhanced reactive mode started. Audio threshold: {current_settings.audio_threshold}")
 
         while True:
             try:
+                # Get current settings for this iteration (allows real-time updates)
+                current_settings = get_current_settings()
+
                 # Get current audio features
                 with audio_features_lock:
                     current_features = audio_features.copy()
@@ -364,7 +406,7 @@ def play_realtime(imgs, args):
                 avg_beat = np.mean(beat_history) if beat_history else 0.0
 
                 # Dynamic threshold based on recent audio activity
-                adaptive_threshold = max(args.audio_threshold, avg_intensity * 1.2)
+                adaptive_threshold = max(current_settings.audio_threshold, avg_intensity * 1.2)
 
                 # Dynamic minimum interval based on beat strength
                 min_interval = base_min_interval * (1.0 - avg_beat * 0.5)  # Faster transitions with stronger beats
@@ -373,7 +415,7 @@ def play_realtime(imgs, args):
                 # Enhanced trigger conditions
                 intensity_trigger = current_intensity > adaptive_threshold
                 beat_trigger = current_beat > 0.3 and time_since_last > min_interval * 0.5
-                peak_trigger = current_peak > args.audio_threshold * 1.5 and time_since_last > min_interval * 0.3
+                peak_trigger = current_peak > current_settings.audio_threshold * 1.5 and time_since_last > min_interval * 0.3
 
                 should_trigger = (intensity_trigger or beat_trigger or peak_trigger) and time_since_last > min_interval
 
@@ -389,36 +431,36 @@ def play_realtime(imgs, args):
                     logging.info(f"Transitioning from image {current_img_idx} to {next_img_idx}")
 
                     a, b = imgs[current_img_idx], imgs[next_img_idx]
-                    pair_seed = (args.seed or 0) + current_img_idx * random.randint(1, 10000)
+                    pair_seed = (current_settings.seed or 0) + current_img_idx * random.randint(1, 10000)
 
                     # Audio-responsive transition parameters
                     # Scale transition speed with audio intensity (higher intensity = faster transitions)
                     speed_multiplier = 0.5 + current_intensity * 1.5  # 0.5x to 2.0x speed
-                    adaptive_seconds = args.seconds_per_transition / speed_multiplier
+                    adaptive_seconds = current_settings.seconds_per_transition / speed_multiplier
                     adaptive_seconds = max(0.3, min(3.0, adaptive_seconds))  # Clamp between 0.3 and 3.0 seconds
 
                     # Choose transition type - always use random selection when requested
-                    if args.transition == "random":
+                    if current_settings.transition == "random":
                         transition_fn = get_random_transition_function()
                         # Log audio characteristics for debugging but don't override random selection
                         logging.debug(f"Audio characteristics - Beat: {current_beat:.3f}, Spectral: {current_spectral:.3f}, Peak: {current_peak:.3f}")
                     else:
-                        transition_fn = get_transition_function(args.transition)
+                        transition_fn = get_transition_function(current_settings.transition)
 
                     # Log which transition is being used for this image pair
                     logging.info(f"Using transition: {transition_fn.__name__}")
 
                     # Audio-responsive pixel size (higher intensity = smaller pixels for more detail)
-                    adaptive_pixel_size = max(2, int(args.pixel_size * (1.5 - current_intensity)))
+                    adaptive_pixel_size = max(2, int(current_settings.pixel_size * (1.5 - current_intensity)))
 
                     # Generate transition frames with audio-responsive parameters
                     transition_frames = list(transition_fn(
                         a, b,
                         pixel_size=adaptive_pixel_size,
-                        fps=args.fps,
+                        fps=current_settings.fps,
                         seconds=adaptive_seconds,
                         hold=0.0,
-                        ease_name=args.easing,
+                        ease_name=current_settings.easing,
                         seed=pair_seed,
                     ))
 
@@ -442,9 +484,9 @@ def play_realtime(imgs, args):
                         frame_buffer.put(current_frame_bgr)
                 else:
                     # No transition, display current image with subtle audio-reactive effects
-                    if current_intensity > args.audio_threshold * 0.5:
+                    if current_intensity > current_settings.audio_threshold * 0.5:
                         # Add subtle brightness modulation based on audio
-                        brightness_factor = 1.0 + (current_intensity - args.audio_threshold * 0.5) * 0.2
+                        brightness_factor = 1.0 + (current_intensity - current_settings.audio_threshold * 0.5) * 0.2
                         brightness_factor = min(1.3, brightness_factor)
 
                         enhanced_frame = (imgs[current_img_idx].astype(np.float32) * brightness_factor).clip(0,
@@ -455,7 +497,9 @@ def play_realtime(imgs, args):
                     else:
                         frame_buffer.put(current_frame_bgr)
 
-                time.sleep(frame_time)  # Maintain frame rate
+                # Use current frame time from settings
+                current_frame_time = 1.0 / current_settings.fps
+                time.sleep(current_frame_time)  # Maintain frame rate
 
             except Exception as e:
                 logging.error(f"Error in reactive frame generation: {e}")
@@ -488,14 +532,15 @@ def play_realtime(imgs, args):
 
     # Start audio monitoring thread for reactive mode
     audio_monitor_thread = None
-    if args.reactive and audio_initialized:
+    current_settings = get_current_settings()
+    if current_settings.reactive and audio_initialized:
         audio_monitor_thread = threading.Thread(target=audio_monitor, daemon=True)
         audio_monitor_thread.start()
         logging.info("Audio monitoring started for reactive mode")
 
-    if args.reactive:
+    if current_settings.reactive:
         logging.warning("Starting reactive slideshow. Press 'q' to quit, 'p' to pause/resume, 'r' to restart.")
-        logging.warning(f"Audio threshold: {args.audio_threshold:.3f}")
+        logging.warning(f"Audio threshold: {current_settings.audio_threshold:.3f}")
     else:
         logging.warning("Starting realtime playback. Press 'q' to quit, 'p' to pause/resume, 'r' to restart.")
 
@@ -512,6 +557,10 @@ def play_realtime(imgs, args):
     try:
         while True:
             if not paused:
+                # Get current settings for dynamic frame timing
+                current_settings = get_current_settings()
+                current_frame_time = 1.0 / current_settings.fps
+
                 # Get next frame from buffer
                 try:
                     frame = frame_buffer.get(timeout=1.0)
@@ -530,20 +579,20 @@ def play_realtime(imgs, args):
                     cv2.imshow(window_name, frame)
                     frame_count += 1
 
-                    # Calculate timing for consistent FPS
-                    expected_time = start_time + (frame_count * frame_time)
+                    # Calculate timing for consistent FPS using current settings
+                    expected_time = start_time + (frame_count * current_frame_time)
                     current_time = time.time()
                     sleep_time = expected_time - current_time
 
                     if sleep_time > 0:
                         time.sleep(sleep_time)
-                    elif sleep_time < -frame_time:  # If we're more than one frame behind, reset timing
+                    elif sleep_time < -current_frame_time:  # If we're more than one frame behind, reset timing
                         start_time = current_time
                         frame_count = 0
 
                 except:
                     # If buffer is empty, just wait a bit
-                    time.sleep(frame_time)
+                    time.sleep(current_frame_time)
 
             # Handle keyboard input
             key = cv2.waitKey(1) & 0xFF
