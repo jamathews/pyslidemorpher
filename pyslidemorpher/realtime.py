@@ -10,6 +10,13 @@ import threading
 from queue import Queue
 import cv2
 
+try:
+    import pygame
+    PYGAME_AVAILABLE = True
+except ImportError:
+    PYGAME_AVAILABLE = False
+    logging.warning("pygame not available - audio playback will be disabled in realtime mode")
+
 from .transitions import (
     make_transition_frames,
     make_swarm_transition_frames,
@@ -64,6 +71,22 @@ def play_realtime(imgs, args):
     """Play slideshow in realtime using OpenCV display with optimized performance."""
     W, H = args.size
     frame_time = 1.0 / args.fps  # Time per frame in seconds
+
+    # Initialize audio if provided
+    audio_initialized = False
+    if args.audio and PYGAME_AVAILABLE:
+        if args.audio.exists():
+            try:
+                pygame.mixer.init()
+                pygame.mixer.music.load(str(args.audio))
+                audio_initialized = True
+                logging.info(f"Audio loaded: {args.audio}")
+            except Exception as e:
+                logging.error(f"Failed to load audio file {args.audio}: {e}")
+        else:
+            logging.error(f"Audio file not found: {args.audio}")
+    elif args.audio and not PYGAME_AVAILABLE:
+        logging.warning("Audio file specified but pygame is not available")
 
     # Create OpenCV window with optimizations
     window_name = "PySlidemorpher - Realtime Slideshow"
@@ -150,6 +173,11 @@ def play_realtime(imgs, args):
 
     logging.info("Starting realtime playback. Press 'q' to quit, 'p' to pause/resume, 'r' to restart.")
 
+    # Start audio playback if initialized
+    if audio_initialized:
+        pygame.mixer.music.play(-1)  # Loop indefinitely
+        logging.info("Audio playback started")
+
     paused = False
     start_time = time.time()
     frame_count = 0
@@ -162,6 +190,10 @@ def play_realtime(imgs, args):
                     frame = frame_buffer.get(timeout=1.0)
                     if frame is None:  # End of frames
                         logging.info("Slideshow completed. Restarting...")
+                        # Restart audio if initialized
+                        if audio_initialized:
+                            pygame.mixer.music.stop()
+                            pygame.mixer.music.play(-1)  # Loop indefinitely
                         # Restart by creating new generator thread
                         generator_thread = threading.Thread(target=frame_generator, daemon=True)
                         generator_thread.start()
@@ -192,6 +224,11 @@ def play_realtime(imgs, args):
                 break
             elif key == ord('p'):
                 paused = not paused
+                if audio_initialized:
+                    if paused:
+                        pygame.mixer.music.pause()
+                    else:
+                        pygame.mixer.music.unpause()
                 if not paused:
                     # Reset timing when resuming
                     start_time = time.time()
@@ -200,6 +237,10 @@ def play_realtime(imgs, args):
             elif key == ord('r'):
                 # Restart slideshow
                 logging.info("Restarting slideshow...")
+                # Restart audio if initialized
+                if audio_initialized:
+                    pygame.mixer.music.stop()
+                    pygame.mixer.music.play(-1)  # Loop indefinitely
                 # Clear buffer
                 while not frame_buffer.empty():
                     try:
@@ -214,5 +255,10 @@ def play_realtime(imgs, args):
                 paused = False
 
     finally:
+        # Stop audio if initialized
+        if audio_initialized:
+            pygame.mixer.music.stop()
+            pygame.mixer.quit()
+            logging.info("Audio playback stopped")
         cv2.destroyAllWindows()
         logging.info("Realtime playback ended.")

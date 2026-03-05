@@ -7,6 +7,7 @@ import argparse
 import logging
 import random
 import time
+import subprocess
 from pathlib import Path
 import cv2
 import imageio
@@ -44,6 +45,8 @@ def main():
     ap.add_argument("--transition", type=str, default="default",
                     choices=["default", "swarm", "tornado", "swirl", "drip", "rain", "sorted", "hue-sorted", "random"],
                     help="Select the type of transition. Use 'random' to randomly choose a different transition for each frame transition.")
+    ap.add_argument("--audio", type=Path, default=None,
+                    help="Audio file to include in the output video")
     ap.add_argument("--realtime", action="store_true",
                     help="Play slideshow in realtime instead of writing to file")
     ap.add_argument("--use-pytorch", action="store_true",
@@ -103,16 +106,31 @@ def main():
         play_realtime(imgs, args)
         return
 
+    # Check if audio file exists if provided
+    if args.audio and not args.audio.exists():
+        logging.error(f"Audio file not found: {args.audio}")
+        raise SystemExit(1)
+
+    # Determine output filename - use temporary name if audio will be added
+    if args.audio:
+        temp_video_out = args.out.replace('.mp4', '_temp_no_audio.mp4')
+        logging.info(f"Creating temporary video without audio: {temp_video_out}")
+    else:
+        temp_video_out = args.out
+
+    # Parameters for video only (audio will be added separately if needed)
+    ffmpeg_params = [
+        "-pix_fmt", "yuv420p",
+        "-preset", args.preset,
+        "-crf", str(args.crf),
+    ]
+
     writer = imageio.get_writer(
-        args.out,
+        temp_video_out,
         fps=args.fps,
         codec="libx264",
         quality=None,
-        ffmpeg_params=[
-            "-pix_fmt", "yuv420p",
-            "-preset", args.preset,
-            "-crf", str(args.crf),
-        ],
+        ffmpeg_params=ffmpeg_params,
     )
 
     try:
@@ -181,5 +199,40 @@ def main():
 
     finally:
         writer.close()
+
+    # If audio was provided, combine the temporary video with audio
+    if args.audio:
+        logging.info(f"Combining video with audio from: {args.audio}")
+        try:
+            # Use ffmpeg to combine video and audio
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",  # -y to overwrite output file
+                "-i", temp_video_out,  # Video input
+                "-i", str(args.audio),  # Audio input
+                "-c:v", "copy",  # Copy video stream (no re-encoding)
+                "-c:a", "aac",   # Encode audio to AAC
+                "-shortest",     # Stop when shortest stream ends
+                args.out         # Final output
+            ]
+
+            result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                logging.info(f"Successfully combined video with audio: {args.out}")
+                # Remove temporary video file
+                Path(temp_video_out).unlink()
+                logging.debug(f"Removed temporary file: {temp_video_out}")
+            else:
+                logging.error(f"Failed to combine video with audio: {result.stderr}")
+                logging.info(f"Temporary video saved as: {temp_video_out}")
+                raise SystemExit(1)
+
+        except FileNotFoundError:
+            logging.error("ffmpeg not found. Please install ffmpeg to use audio functionality.")
+            logging.info(f"Video without audio saved as: {temp_video_out}")
+            raise SystemExit(1)
+        except Exception as e:
+            logging.error(f"Error combining video with audio: {e}")
+            logging.info(f"Video without audio saved as: {temp_video_out}")
+            raise SystemExit(1)
 
     logging.info(f"Done. Wrote: {args.out}")

@@ -8,6 +8,7 @@ opencv-python = "*"
 imageio = {extras = ["ffmpeg"], version = "*"}
 torch = "*"
 torchvision = "*"
+pygame = "*"
 
 [dev-packages]
 
