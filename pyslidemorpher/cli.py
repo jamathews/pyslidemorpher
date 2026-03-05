@@ -37,7 +37,7 @@ def main():
     ap.add_argument("--hold", type=float, default=0.5)
     ap.add_argument("--pixel-size", type=int, default=4)
     ap.add_argument("--size", type=parse_size, default="1920x1080")
-    ap.add_argument("--seed", type=int, default=123)
+    ap.add_argument("--seed", type=int, default=None, help="Random seed for reproducible results. If not specified, uses current time for true randomness.")
     ap.add_argument("--easing", default="smoothstep",
                     choices=["linear", "smoothstep", "cubic"])
     ap.add_argument("--crf", type=int, default=18)
@@ -74,8 +74,21 @@ def main():
         raise SystemExit(1)
 
     # Configure logging
-    logging.basicConfig(level=getattr(logging, args.log_level.upper(), None),
-                        format="%(asctime)s - %(levelname)s - %(message)s")
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    logging.basicConfig(level=log_level,
+                        format="%(asctime)s - %(levelname)s - %(message)s",
+                        force=True)  # Force reconfiguration of logging
+
+    # Initialize random seed for better randomness
+    # If no seed is provided, use current time for true randomness
+    if args.seed is None:
+        import time
+        seed = int(time.time() * 1000) % (2**32)  # Use current time as seed
+        random.seed(seed)
+        logging.debug(f"Using time-based random seed: {seed}")
+    else:
+        random.seed(args.seed)
+        logging.debug(f"Using provided random seed: {args.seed}")
 
     # Set PyTorch usage based on command-line argument
     global USE_PYTORCH
@@ -164,11 +177,13 @@ def main():
         for i in range(len(imgs) - 1):
             logging.info(f"Processing transition {i + 1}/{len(imgs) - 1}")
             a, b = imgs[i], imgs[i + 1]
-            pair_seed = (args.seed or 0) + i * random.randint(1, 10000)
+            # Generate a unique seed for each transition pair
+            base_seed = args.seed if args.seed is not None else 0
+            pair_seed = base_seed + i * random.randint(1, 10000)
 
             if args.transition == "random":
                 transition_fn = get_random_transition_function()
-                logging.debug(f"Randomly selected transition: {transition_fn.__name__}")
+                logging.info(f"Randomly selected transition: {transition_fn.__name__}")
             elif args.transition == "swarm":
                 transition_fn = make_swarm_transition_frames
             elif args.transition == "tornado":
@@ -185,6 +200,9 @@ def main():
                 transition_fn = make_hue_sorted_transition_frames
             else:
                 transition_fn = make_transition_frames
+
+            # Log which transition is being used for this image pair
+            logging.critical(f"Using transition: {transition_fn.__name__}")
 
             transition_start = time.time()  # Track the start time of the current transition
 
