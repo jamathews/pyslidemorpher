@@ -370,7 +370,7 @@ def play_realtime(imgs, args):
                         transition_fn = get_transition_function(args.transition)
 
                     # Log which transition is being used for this image pair
-                    logging.critical(f"Using transition: {transition_fn.__name__}")
+                    logging.info(f"Using transition: {transition_fn.__name__}")
 
                     # Audio-responsive pixel size (higher intensity = smaller pixels for more detail)
                     adaptive_pixel_size = max(2, int(args.pixel_size * (1.5 - current_intensity)))

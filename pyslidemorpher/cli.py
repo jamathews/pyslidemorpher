@@ -202,7 +202,7 @@ def main():
                 transition_fn = make_transition_frames
 
             # Log which transition is being used for this image pair
-            logging.critical(f"Using transition: {transition_fn.__name__}")
+            logging.info(f"Using transition: {transition_fn.__name__}")
 
             transition_start = time.time()  # Track the start time of the current transition
 
