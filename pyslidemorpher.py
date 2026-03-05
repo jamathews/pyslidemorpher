@@ -171,6 +171,29 @@ def render_frame_optimized(pos, cols, grid_shape):
         return render_frame(pos, cols, grid_shape)
 
 
+def create_smooth_blend_frame(solid_img, pixelated_img, blend_factor):
+    """
+    Create a smooth blend between a solid image and its pixelated version.
+
+    Args:
+        solid_img: Full resolution solid image
+        pixelated_img: Pixelated version of the image
+        blend_factor: Float between 0.0 (fully solid) and 1.0 (fully pixelated)
+
+    Returns:
+        Blended frame
+    """
+    # Ensure both images have the same dimensions
+    if solid_img.shape != pixelated_img.shape:
+        H, W = solid_img.shape[:2]
+        pixelated_img = cv2.resize(pixelated_img, (W, H), interpolation=cv2.INTER_NEAREST)
+
+    # Apply smooth blending
+    blend_factor = np.clip(blend_factor, 0.0, 1.0)
+    blended = (1.0 - blend_factor) * solid_img.astype(np.float32) + blend_factor * pixelated_img.astype(np.float32)
+    return blended.clip(0, 255).astype(np.uint8)
+
+
 def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
     total_hold_frames = int(round(hold * fps))
     logging.debug(f"Generating hold frames: {total_hold_frames}")
@@ -184,15 +207,50 @@ def make_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease
     ease = easing_fn(ease_name)
     H, W = a_img.shape[:2]
 
-    for f in range(n_frames):
-        t = f / (n_frames - 1) if n_frames > 1 else 1.0
+    # Calculate smooth blend frames (about 10% of transition at start and end)
+    blend_frames = max(1, int(n_frames * 0.1))
+    core_frames = n_frames - 2 * blend_frames
+
+    # Create initial pixelated versions for blending
+    initial_pos = a_pos.copy()
+    initial_cols = a_cols.copy()
+    initial_low_frame = render_frame_optimized(initial_pos, initial_cols, grid_shape)
+    initial_pixelated = cv2.resize(initial_low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+
+    final_pos = b_pos.copy()
+    final_cols = b_cols.copy()
+    final_low_frame = render_frame_optimized(final_pos, final_cols, grid_shape)
+    final_pixelated = cv2.resize(final_low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+
+    frame_idx = 0
+
+    # Start blend frames: solid a_img → pixelated
+    for f in range(blend_frames):
+        blend_factor = (f + 1) / blend_frames  # 0 to 1
+        frame = create_smooth_blend_frame(a_img, initial_pixelated, blend_factor)
+        logging.debug(f"Generated start blend frame {frame_idx + 1}/{n_frames}")
+        yield frame
+        frame_idx += 1
+
+    # Core transition frames: pixelated a → pixelated b
+    for f in range(core_frames):
+        t = f / (core_frames - 1) if core_frames > 1 else 1.0
         s = ease(t)
         pos = (1.0 - s) * a_pos + s * b_pos
         cols = (1.0 - s) * a_cols + s * b_cols
         low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
-        logging.debug(f"Generated transition frame {f + 1}/{n_frames}")
+        logging.debug(f"Generated core transition frame {frame_idx + 1}/{n_frames}")
         yield frame
+        frame_idx += 1
+
+    # End blend frames: pixelated → solid b_img
+    for f in range(blend_frames):
+        blend_factor = 1.0 - (f + 1) / blend_frames  # 1 to 0
+        frame = create_smooth_blend_frame(b_img, final_pixelated, blend_factor)
+        logging.debug(f"Generated end blend frame {frame_idx + 1}/{n_frames}")
+        yield frame
+        frame_idx += 1
 
     for _ in range(total_hold_frames):
         yield b_img
@@ -212,13 +270,39 @@ def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold
     ease = easing_fn(ease_name)
     H, W = a_img.shape[:2]
 
+    # Calculate smooth blend frames (about 10% of transition at start and end)
+    blend_frames = max(1, int(n_frames * 0.1))
+    core_frames = n_frames - 2 * blend_frames
+
+    # Create initial pixelated versions for blending
+    initial_pos = a_pos.copy()
+    initial_cols = a_cols.copy()
+    initial_low_frame = render_frame_optimized(initial_pos, initial_cols, grid_shape)
+    initial_pixelated = cv2.resize(initial_low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+
+    final_pos = b_pos.copy()
+    final_cols = b_cols.copy()
+    final_low_frame = render_frame_optimized(final_pos, final_cols, grid_shape)
+    final_pixelated = cv2.resize(final_low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+
     # Increase randomness to exaggerate the swarming effect
     rng = np.random.default_rng(seed)
     velocities = rng.uniform(-4, 4, size=(len(a_pos), 2))  # Faster initial random velocities
     accelerations = rng.uniform(-0.5, 0.5, size=(len(a_pos), 2))  # Larger random accelerations
 
-    for f in range(n_frames):
-        t = f / (n_frames - 1) if n_frames > 1 else 1.0
+    frame_idx = 0
+
+    # Start blend frames: solid a_img → pixelated
+    for f in range(blend_frames):
+        blend_factor = (f + 1) / blend_frames  # 0 to 1
+        frame = create_smooth_blend_frame(a_img, initial_pixelated, blend_factor)
+        logging.debug(f"Generated swarm start blend frame {frame_idx + 1}/{n_frames}")
+        yield frame
+        frame_idx += 1
+
+    # Core swarm transition frames: pixelated a → pixelated b with swarming
+    for f in range(core_frames):
+        t = f / (core_frames - 1) if core_frames > 1 else 1.0
         s = ease(t)
 
         # Update velocities and positions
@@ -247,8 +331,17 @@ def make_swarm_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold
         # Render frame
         low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
-        logging.debug(f"Generated intensified swarm transition frame {f + 1}/{n_frames}")
+        logging.debug(f"Generated swarm core transition frame {frame_idx + 1}/{n_frames}")
         yield frame
+        frame_idx += 1
+
+    # End blend frames: pixelated → solid b_img
+    for f in range(blend_frames):
+        blend_factor = 1.0 - (f + 1) / blend_frames  # 1 to 0
+        frame = create_smooth_blend_frame(b_img, final_pixelated, blend_factor)
+        logging.debug(f"Generated swarm end blend frame {frame_idx + 1}/{n_frames}")
+        yield frame
+        frame_idx += 1
 
     for _ in range(total_hold_frames):
         yield b_img
@@ -270,8 +363,34 @@ def make_tornado_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, ho
     ease = easing_fn(ease_name)
     center = np.array([W / 2.0 / pixel_size, H / 2.0 / pixel_size])  # Center of the tornado
 
-    for f in range(n_frames):
-        t = f / (n_frames - 1) if n_frames > 1 else 1.0
+    # Calculate smooth blend frames (about 10% of transition at start and end)
+    blend_frames = max(1, int(n_frames * 0.1))
+    core_frames = n_frames - 2 * blend_frames
+
+    # Create initial pixelated versions for blending
+    initial_pos = a_pos.copy()
+    initial_cols = a_cols.copy()
+    initial_low_frame = render_frame_optimized(initial_pos, initial_cols, grid_shape)
+    initial_pixelated = cv2.resize(initial_low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+
+    final_pos = b_pos.copy()
+    final_cols = b_cols.copy()
+    final_low_frame = render_frame_optimized(final_pos, final_cols, grid_shape)
+    final_pixelated = cv2.resize(final_low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+
+    frame_idx = 0
+
+    # Start blend frames: solid a_img → pixelated
+    for f in range(blend_frames):
+        blend_factor = (f + 1) / blend_frames  # 0 to 1
+        frame = create_smooth_blend_frame(a_img, initial_pixelated, blend_factor)
+        logging.debug(f"Generated tornado start blend frame {frame_idx + 1}/{n_frames}")
+        yield frame
+        frame_idx += 1
+
+    # Core tornado transition frames: pixelated a → pixelated b with tornado effect
+    for f in range(core_frames):
+        t = f / (core_frames - 1) if core_frames > 1 else 1.0
         s = ease(t)
 
         # Tornado effect: calculate radii and spiral angles
@@ -297,8 +416,17 @@ def make_tornado_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, ho
         # Render and yield the frame
         low_frame = render_frame_optimized(pos, cols, grid_shape)
         frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
-        logging.debug(f"Generated tornado transition frame {f + 1}/{n_frames}")
+        logging.debug(f"Generated tornado core transition frame {frame_idx + 1}/{n_frames}")
         yield frame
+        frame_idx += 1
+
+    # End blend frames: pixelated → solid b_img
+    for f in range(blend_frames):
+        blend_factor = 1.0 - (f + 1) / blend_frames  # 1 to 0
+        frame = create_smooth_blend_frame(b_img, final_pixelated, blend_factor)
+        logging.debug(f"Generated tornado end blend frame {frame_idx + 1}/{n_frames}")
+        yield frame
+        frame_idx += 1
 
     for _ in range(total_hold_frames):
         yield b_img
