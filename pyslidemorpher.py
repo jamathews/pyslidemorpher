@@ -304,6 +304,90 @@ def make_tornado_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, ho
         yield b_img
 
 
+def make_swirl_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
+    """Create a swirl-style transition with smooth three-phase flow: swirl current image -> transition -> unswirl next image."""
+    total_hold_frames = int(round(hold * fps))
+    logging.debug(f"Generating hold frames: {total_hold_frames}")
+    for _ in range(total_hold_frames):
+        yield a_img
+
+    H, W = a_img.shape[:2]
+    a_low, _ = downsample_for_particles(a_img, pixel_size)
+    b_low, grid_shape = downsample_for_particles(b_img, pixel_size)
+    a_pos, b_pos, a_cols, b_cols, grid_shape = prepare_transition(a_low, b_low, seed=seed)
+
+    n_frames = max(2, int(round(seconds * fps)))
+    ease = easing_fn(ease_name)
+    center = np.array([W / 2.0 / pixel_size, H / 2.0 / pixel_size])  # Center of the swirl
+
+    # Calculate swirl properties for both images
+    def calculate_swirl_positions(base_pos, swirl_intensity_factor):
+        offset_from_center = base_pos - center
+        radii = np.linalg.norm(offset_from_center, axis=1)
+        angles = np.arctan2(offset_from_center[:, 1], offset_from_center[:, 0])
+
+        # Calculate maximum radius for normalization
+        max_radius = np.max(radii) if len(radii) > 0 else 1.0
+        normalized_radii = radii / max_radius
+        center_bias = 1.0 - normalized_radii  # 1.0 at center, 0.0 at perimeter
+
+        # Apply swirl intensity
+        swirl_intensity = swirl_intensity_factor * np.pi * 4 * (1.0 + center_bias * 2.0)
+        swirled_angles = angles + swirl_intensity
+
+        # Calculate swirled positions
+        swirled_offsets = np.column_stack((
+            radii * np.cos(swirled_angles),
+            radii * np.sin(swirled_angles)
+        ))
+        return center + swirled_offsets
+
+    for f in range(n_frames):
+        t = f / (n_frames - 1) if n_frames > 1 else 1.0
+        s = ease(t)
+
+        # Three-phase transition:
+        # Phase 1 (0.0 - 0.33): Swirl the current image
+        # Phase 2 (0.33 - 0.67): Transition from swirled current to swirled next
+        # Phase 3 (0.67 - 1.0): Unswirl the next image
+
+        if s <= 0.33:
+            # Phase 1: Swirl the current image
+            phase_progress = s / 0.33  # 0 to 1 within this phase
+            swirl_factor = phase_progress  # Increase swirl intensity
+
+            pos = (1.0 - phase_progress) * a_pos + phase_progress * calculate_swirl_positions(a_pos, swirl_factor)
+            cols = a_cols  # Keep original colors
+
+        elif s <= 0.67:
+            # Phase 2: Transition between swirled images
+            phase_progress = (s - 0.33) / 0.34  # 0 to 1 within this phase
+
+            # Both images are fully swirled during this phase
+            swirled_a_pos = calculate_swirl_positions(a_pos, 1.0)
+            swirled_b_pos = calculate_swirl_positions(b_pos, 1.0)
+
+            pos = (1.0 - phase_progress) * swirled_a_pos + phase_progress * swirled_b_pos
+            cols = (1.0 - phase_progress) * a_cols + phase_progress * b_cols
+
+        else:
+            # Phase 3: Unswirl the next image
+            phase_progress = (s - 0.67) / 0.33  # 0 to 1 within this phase
+            swirl_factor = 1.0 - phase_progress  # Decrease swirl intensity
+
+            pos = (1.0 - phase_progress) * calculate_swirl_positions(b_pos, swirl_factor) + phase_progress * b_pos
+            cols = b_cols  # Keep target colors
+
+        # Render and yield the frame
+        low_frame = render_frame_optimized(pos, cols, grid_shape)
+        frame = cv2.resize(low_frame, (W, H), interpolation=cv2.INTER_NEAREST)
+        logging.debug(f"Generated swirl transition frame {f + 1}/{n_frames}")
+        yield frame
+
+    for _ in range(total_hold_frames):
+        yield b_img
+
+
 def make_drip_transition_frames(a_img, b_img, *, pixel_size, fps, seconds, hold, ease_name, seed):
     """Create a transition where darkest pixels fall to the bottom and brightest pixels rise to the top."""
     total_hold_frames = int(round(hold * fps))
@@ -601,6 +685,8 @@ def play_realtime(imgs, args):
                     transition_fn = make_swarm_transition_frames
                 elif args.transition == "tornado":
                     transition_fn = make_tornado_transition_frames
+                elif args.transition == "swirl":
+                    transition_fn = make_swirl_transition_frames
                 elif args.transition == "drip":
                     transition_fn = make_drip_transition_frames
                 elif args.transition == "rain":
@@ -721,8 +807,9 @@ def get_random_transition_function():
         make_transition_frames,        # default
         make_swarm_transition_frames,  # swarm
         make_tornado_transition_frames, # tornado
+        make_swirl_transition_frames,  # swirl
         make_drip_transition_frames,   # drip
-        make_rainfall_transition_frames, # rain
+        # make_rainfall_transition_frames, # rain
         make_sorted_transition_frames, # sorted
         make_hue_sorted_transition_frames, # hue-sorted
     ]
@@ -735,7 +822,7 @@ def get_random_transition_function():
     if get_random_transition_function._last_selected is None or len(transition_functions) <= 1:
         selected = random.choice(transition_functions)
         get_random_transition_function._last_selected = selected
-        logging.critical(f"Randomly selected transition function: {selected.__name__}")
+        logging.info(f"Randomly selected transition function: {selected.__name__}")
         return selected
 
     # Create a list of available functions excluding the last selected one
@@ -745,7 +832,7 @@ def get_random_transition_function():
     # Select from the available functions
     selected = random.choice(available_functions)
     get_random_transition_function._last_selected = selected
-    logging.critical(f"Randomly selected transition function: {selected.__name__}")
+    logging.info(f"Randomly selected transition function: {selected.__name__}")
     return selected
 
 
@@ -764,7 +851,7 @@ def main():
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--preset", default="medium")
     ap.add_argument("--transition", type=str, default="default",
-                    choices=["default", "swarm", "tornado", "drip", "rain", "sorted", "hue-sorted", "random"],
+                    choices=["default", "swarm", "tornado", "swirl", "drip", "rain", "sorted", "hue-sorted", "random"],
                     help="Select the type of transition. Use 'random' to randomly choose a different transition for each frame transition.")
     ap.add_argument("--realtime", action="store_true",
                     help="Play slideshow in realtime instead of writing to file")
@@ -859,6 +946,8 @@ def main():
                 transition_fn = make_swarm_transition_frames
             elif args.transition == "tornado":
                 transition_fn = make_tornado_transition_frames
+            elif args.transition == "swirl":
+                transition_fn = make_swirl_transition_frames
             elif args.transition == "drip":
                 transition_fn = make_drip_transition_frames
             elif args.transition == "rain":
