@@ -57,6 +57,8 @@ def main():
                     help="Enable PyTorch GPU acceleration (requires PyTorch installation)")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                     help="Set the log level for the script")
+    ap.add_argument("--web-gui", action="store_true",
+                    help="Enable web-based GUI for realtime control (requires --realtime and Flask)")
     args = ap.parse_args()
 
     # Validate reactive mode requirements
@@ -72,6 +74,12 @@ def main():
     if args.audio_threshold < 0.0 or args.audio_threshold > 1.0:
         print("Error: --audio-threshold must be between 0.0 and 1.0")
         raise SystemExit(1)
+
+    # Validate web GUI requirements
+    if args.web_gui:
+        if not args.realtime:
+            print("Error: --web-gui can only be used with --realtime mode")
+            raise SystemExit(1)
 
     # Configure logging
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)

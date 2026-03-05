@@ -34,6 +34,13 @@ from .transitions import (
     make_hue_sorted_transition_frames
 )
 
+try:
+    from .web_gui import get_controller, start_web_server, FLASK_AVAILABLE
+    WEB_GUI_AVAILABLE = FLASK_AVAILABLE
+except ImportError:
+    WEB_GUI_AVAILABLE = False
+    logging.warning("Web GUI not available - Flask or web_gui module not found")
+
 
 def get_random_transition_function():
     """Randomly select a transition function from available options.
@@ -77,6 +84,35 @@ def play_realtime(imgs, args):
     """Play slideshow in realtime using OpenCV display with optimized performance."""
     W, H = args.size
     frame_time = 1.0 / args.fps  # Time per frame in seconds
+
+    # Initialize web GUI controller if requested and available
+    web_controller = None
+    web_server_thread = None
+    if hasattr(args, 'web_gui') and args.web_gui and WEB_GUI_AVAILABLE:
+        try:
+            web_controller = get_controller()
+            # Initialize controller with current args
+            web_controller.update_setting('fps', args.fps)
+            web_controller.update_setting('seconds_per_transition', args.seconds_per_transition)
+            web_controller.update_setting('hold', args.hold)
+            web_controller.update_setting('pixel_size', args.pixel_size)
+            web_controller.update_setting('transition', args.transition)
+            web_controller.update_setting('easing', args.easing)
+            web_controller.update_setting('audio_threshold', args.audio_threshold)
+            web_controller.update_setting('reactive', args.reactive)
+
+            # Start web server
+            web_server_thread = start_web_server()
+            if web_server_thread:
+                logging.warning("Web GUI available at http://localhost:5001")
+            else:
+                logging.warning("Failed to start web server")
+                web_controller = None
+        except Exception as e:
+            logging.error(f"Failed to initialize web GUI: {e}")
+            web_controller = None
+    elif hasattr(args, 'web_gui') and args.web_gui and not WEB_GUI_AVAILABLE:
+        logging.error("Web GUI requested but Flask is not available. Install Flask to use web GUI.")
 
     # Log realtime mode start at WARNING level so it's always visible
     logging.warning(f"Starting realtime slideshow with {len(imgs)-1} images at {args.fps} fps ({W}x{H})")
@@ -469,6 +505,7 @@ def play_realtime(imgs, args):
         logging.warning("Audio playback started")  # WARNING level so always visible
 
     paused = False
+    stop_requested = False
     start_time = time.time()
     frame_count = 0
 
@@ -543,6 +580,108 @@ def play_realtime(imgs, args):
                 start_time = time.time()
                 frame_count = 0
                 paused = False
+
+            # Handle web GUI commands and setting updates
+            if web_controller:
+                # Check for commands from web interface
+                try:
+                    while not web_controller.command_queue.empty():
+                        command = web_controller.command_queue.get_nowait()
+                        if command == 'pause':
+                            paused = True
+                            if audio_initialized:
+                                pygame.mixer.music.pause()
+                            logging.info("Paused via web interface")
+                        elif command == 'resume':
+                            paused = False
+                            if audio_initialized:
+                                pygame.mixer.music.unpause()
+                            start_time = time.time()
+                            frame_count = 0
+                            logging.info("Resumed via web interface")
+                        elif command == 'restart':
+                            logging.info("Restarting via web interface...")
+                            if audio_initialized:
+                                pygame.mixer.music.stop()
+                                pygame.mixer.music.play(-1)
+                            while not frame_buffer.empty():
+                                try:
+                                    frame_buffer.get_nowait()
+                                except:
+                                    break
+                            generator_thread = threading.Thread(target=frame_generator, daemon=True)
+                            generator_thread.start()
+                            start_time = time.time()
+                            frame_count = 0
+                            paused = False
+                        elif command == 'next':
+                            # Skip to next image by clearing buffer
+                            while not frame_buffer.empty():
+                                try:
+                                    frame_buffer.get_nowait()
+                                except:
+                                    break
+                            logging.info("Skipped to next image via web interface")
+                        elif command == 'stop':
+                            logging.info("Stopping slideshow via web interface...")
+                            stop_requested = True
+                except:
+                    pass  # Ignore queue errors
+
+                # Update args with new settings from web interface
+                current_settings = web_controller.get_settings()
+                settings_changed = False
+
+                if args.fps != current_settings['fps']:
+                    args.fps = current_settings['fps']
+                    frame_time = 1.0 / args.fps
+                    settings_changed = True
+
+                if args.seconds_per_transition != current_settings['seconds_per_transition']:
+                    args.seconds_per_transition = current_settings['seconds_per_transition']
+                    settings_changed = True
+
+                if args.hold != current_settings['hold']:
+                    args.hold = current_settings['hold']
+                    settings_changed = True
+
+                if args.pixel_size != current_settings['pixel_size']:
+                    args.pixel_size = current_settings['pixel_size']
+                    settings_changed = True
+
+                if args.transition != current_settings['transition']:
+                    args.transition = current_settings['transition']
+                    settings_changed = True
+
+                if args.easing != current_settings['easing']:
+                    args.easing = current_settings['easing']
+                    settings_changed = True
+
+                if args.audio_threshold != current_settings['audio_threshold']:
+                    args.audio_threshold = current_settings['audio_threshold']
+                    settings_changed = True
+
+                if args.reactive != current_settings['reactive']:
+                    args.reactive = current_settings['reactive']
+                    settings_changed = True
+
+                # Update paused state from web interface
+                if paused != current_settings['paused']:
+                    paused = current_settings['paused']
+                    if audio_initialized:
+                        if paused:
+                            pygame.mixer.music.pause()
+                        else:
+                            pygame.mixer.music.unpause()
+                            start_time = time.time()
+                            frame_count = 0
+
+                if settings_changed:
+                    logging.info("Settings updated via web interface")
+
+            # Check if stop was requested via web interface
+            if stop_requested:
+                break
 
     finally:
         # Stop audio if initialized
