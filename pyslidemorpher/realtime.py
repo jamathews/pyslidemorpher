@@ -368,6 +368,8 @@ def play_realtime(imgs, args):
         in_transition = False
         transition_frames = []
         transition_frame_idx = 0
+        in_hold = False
+        hold_frames_remaining = 0
         last_trigger_time = time.time()
 
         # Minimum interval between transitions to prevent rapid switching
@@ -396,7 +398,7 @@ def play_realtime(imgs, args):
                 is_loud = current_intensity >= current_settings.audio_threshold
                 can_trigger = time_since_last >= min_interval
 
-                should_trigger = is_loud and can_trigger and not in_transition
+                should_trigger = is_loud and can_trigger and not in_transition and not in_hold
 
                 if should_trigger:
                     # Trigger new transition
@@ -425,7 +427,7 @@ def play_realtime(imgs, args):
                         pixel_size=current_settings.pixel_size,
                         fps=current_settings.fps,
                         seconds=current_settings.seconds_per_transition,
-                        hold=0.0,
+                        hold=0.0,  # We handle hold separately in reactive mode
                         ease_name=current_settings.easing,
                         seed=pair_seed,
                     ))
@@ -443,13 +445,27 @@ def play_realtime(imgs, args):
                         frame_buffer.put(frame_bgr)
                         transition_frame_idx += 1
                     else:
-                        # Transition complete
+                        # Transition complete, start hold period
                         in_transition = False
                         transition_frames = []
                         current_frame_bgr = cv2.cvtColor(imgs[current_img_idx], cv2.COLOR_RGB2BGR)
+
+                        # Calculate hold frames based on current settings
+                        hold_frames_remaining = int(round(current_settings.hold * current_settings.fps))
+                        if hold_frames_remaining > 0:
+                            in_hold = True
+                            logging.debug(f"Starting hold period: {hold_frames_remaining} frames ({current_settings.hold:.2f}s)")
+
                         frame_buffer.put(current_frame_bgr)
+                elif in_hold:
+                    # In hold period, display current image
+                    frame_buffer.put(current_frame_bgr)
+                    hold_frames_remaining -= 1
+                    if hold_frames_remaining <= 0:
+                        in_hold = False
+                        logging.debug("Hold period complete")
                 else:
-                    # No transition, display current image
+                    # No transition, no hold, display current image
                     frame_buffer.put(current_frame_bgr)
 
                 # Use current frame time from settings
