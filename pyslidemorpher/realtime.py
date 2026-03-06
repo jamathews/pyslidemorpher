@@ -360,110 +360,71 @@ def play_realtime(imgs, args):
         frame_buffer.put(None)
 
     def reactive_frame_generator():
-        """Enhanced reactive mode: generate frames based on comprehensive audio analysis."""
+        """Simple reactive mode: generate frames based on audio loudness threshold."""
         current_img_idx = 0
         current_frame_bgr = cv2.cvtColor(imgs[current_img_idx], cv2.COLOR_RGB2BGR)
 
-        # Enhanced state tracking
+        # Simple state tracking
         in_transition = False
         transition_frames = []
         transition_frame_idx = 0
         last_trigger_time = time.time()
 
-        # Adaptive parameters based on audio
-        base_min_interval = 0.5  # Reduced minimum interval for more responsiveness
-        intensity_history = []
-        beat_history = []
+        # Minimum interval between transitions to prevent rapid switching
+        min_interval = 0.5  # 500ms minimum between transitions
 
         # Put initial frame
         frame_buffer.put(current_frame_bgr)
 
         # Get initial settings
         current_settings = get_current_settings()
-        logging.info(f"Enhanced reactive mode started. Audio threshold: {current_settings.audio_threshold}")
+        logging.info(f"Simple reactive mode started. Audio threshold: {current_settings.audio_threshold}")
 
         while True:
             try:
                 # Get current settings for this iteration (allows real-time updates)
                 current_settings = get_current_settings()
 
-                # Get current audio features
+                # Get current audio intensity (loudness)
                 with audio_features_lock:
-                    current_features = audio_features.copy()
-
-                current_intensity = current_features['intensity']
-                current_peak = current_features['peak']
-                current_beat = current_features['beat_strength']
-                current_spectral = current_features['spectral_centroid']
-
-                # Update history for adaptive behavior
-                intensity_history.append(current_intensity)
-                beat_history.append(current_beat)
-                if len(intensity_history) > 50:  # Keep last 0.5 seconds of history
-                    intensity_history.pop(0)
-                    beat_history.pop(0)
+                    current_intensity = audio_features['intensity']
 
                 current_time = time.time()
                 time_since_last = current_time - last_trigger_time
 
-                # Calculate adaptive threshold and timing
-                avg_intensity = np.mean(intensity_history) if intensity_history else 0.0
-                avg_beat = np.mean(beat_history) if beat_history else 0.0
+                # Simple trigger logic: loud audio triggers transition, quiet audio doesn't
+                is_loud = current_intensity >= current_settings.audio_threshold
+                can_trigger = time_since_last >= min_interval
 
-                # Dynamic threshold based on recent audio activity
-                adaptive_threshold = max(current_settings.audio_threshold, avg_intensity * 1.2)
+                should_trigger = is_loud and can_trigger and not in_transition
 
-                # Dynamic minimum interval based on beat strength
-                min_interval = base_min_interval * (1.0 - avg_beat * 0.5)  # Faster transitions with stronger beats
-                min_interval = max(0.2, min_interval)  # Never go below 0.2 seconds
-
-                # Enhanced trigger conditions
-                intensity_trigger = current_intensity > adaptive_threshold
-                beat_trigger = current_beat > 0.3 and time_since_last > min_interval * 0.5
-                peak_trigger = current_peak > current_settings.audio_threshold * 1.5 and time_since_last > min_interval * 0.3
-
-                should_trigger = (intensity_trigger or beat_trigger or peak_trigger) and time_since_last > min_interval
-
-                if not in_transition and should_trigger:
+                if should_trigger:
                     # Trigger new transition
                     next_img_idx = (current_img_idx + 1) % len(imgs)
                     if next_img_idx == 0:
                         next_img_idx = 1 if len(imgs) > 1 else 0
 
-                    trigger_type = "intensity" if intensity_trigger else ("beat" if beat_trigger else "peak")
-                    logging.info(
-                        f"Audio trigger ({trigger_type})! I:{current_intensity:.3f} B:{current_beat:.3f} P:{current_peak:.3f}")
+                    logging.info(f"Audio trigger! Loudness: {current_intensity:.3f} >= threshold: {current_settings.audio_threshold:.3f}")
                     logging.info(f"Transitioning from image {current_img_idx} to {next_img_idx}")
 
                     a, b = imgs[current_img_idx], imgs[next_img_idx]
                     pair_seed = (current_settings.seed or 0) + current_img_idx * random.randint(1, 10000)
 
-                    # Audio-responsive transition parameters
-                    # Scale transition speed with audio intensity (higher intensity = faster transitions)
-                    speed_multiplier = 0.5 + current_intensity * 1.5  # 0.5x to 2.0x speed
-                    adaptive_seconds = current_settings.seconds_per_transition / speed_multiplier
-                    adaptive_seconds = max(0.3, min(3.0, adaptive_seconds))  # Clamp between 0.3 and 3.0 seconds
-
-                    # Choose transition type - always use random selection when requested
+                    # Choose transition type
                     if current_settings.transition == "random":
                         transition_fn = get_random_transition_function()
-                        # Log audio characteristics for debugging but don't override random selection
-                        logging.debug(f"Audio characteristics - Beat: {current_beat:.3f}, Spectral: {current_spectral:.3f}, Peak: {current_peak:.3f}")
                     else:
                         transition_fn = get_transition_function(current_settings.transition)
 
                     # Log which transition is being used for this image pair
                     logging.info(f"Using transition: {transition_fn.__name__}")
 
-                    # Audio-responsive pixel size (higher intensity = smaller pixels for more detail)
-                    adaptive_pixel_size = max(2, int(current_settings.pixel_size * (1.5 - current_intensity)))
-
-                    # Generate transition frames with audio-responsive parameters
+                    # Generate transition frames with standard parameters
                     transition_frames = list(transition_fn(
                         a, b,
-                        pixel_size=adaptive_pixel_size,
+                        pixel_size=current_settings.pixel_size,
                         fps=current_settings.fps,
-                        seconds=adaptive_seconds,
+                        seconds=current_settings.seconds_per_transition,
                         hold=0.0,
                         ease_name=current_settings.easing,
                         seed=pair_seed,
@@ -488,19 +449,8 @@ def play_realtime(imgs, args):
                         current_frame_bgr = cv2.cvtColor(imgs[current_img_idx], cv2.COLOR_RGB2BGR)
                         frame_buffer.put(current_frame_bgr)
                 else:
-                    # No transition, display current image with subtle audio-reactive effects
-                    if current_intensity > current_settings.audio_threshold * 0.5:
-                        # Add subtle brightness modulation based on audio
-                        brightness_factor = 1.0 + (current_intensity - current_settings.audio_threshold * 0.5) * 0.2
-                        brightness_factor = min(1.3, brightness_factor)
-
-                        enhanced_frame = (imgs[current_img_idx].astype(np.float32) * brightness_factor).clip(0,
-                                                                                                             255).astype(
-                            np.uint8)
-                        frame_bgr = cv2.cvtColor(enhanced_frame, cv2.COLOR_RGB2BGR)
-                        frame_buffer.put(frame_bgr)
-                    else:
-                        frame_buffer.put(current_frame_bgr)
+                    # No transition, display current image
+                    frame_buffer.put(current_frame_bgr)
 
                 # Use current frame time from settings
                 current_frame_time = 1.0 / current_settings.fps
