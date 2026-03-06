@@ -82,69 +82,6 @@ def get_random_transition_function():
     return selected
 
 
-def save_window_position(x, y):
-    """Save window position to ~/.pyslidemorpher/window_position.json"""
-    try:
-        # Create the ~/.pyslidemorpher directory if it doesn't exist
-        config_dir = Path.home() / ".pyslidemorpher"
-        config_dir.mkdir(exist_ok=True)
-
-        # Create the position data
-        position_data = {
-            "x": x,
-            "y": y,
-            "timestamp": time.time()
-        }
-
-        # Save to JSON file
-        position_file = config_dir / "window_position.json"
-        with open(position_file, 'w') as f:
-            json.dump(position_data, f, indent=2)
-
-    except Exception as e:
-        # Log error but don't crash the application
-        logging.debug(f"Failed to save window position to JSON: {e}")
-
-
-def load_window_position():
-    """Load window position from ~/.pyslidemorpher/window_position.json"""
-    try:
-        # Check if the JSON file exists
-        config_dir = Path.home() / ".pyslidemorpher"
-        position_file = config_dir / "window_position.json"
-
-        if not position_file.exists():
-            logging.debug("Window position file does not exist")
-            return None
-
-        # Load and parse the JSON file
-        with open(position_file, 'r') as f:
-            position_data = json.load(f)
-
-        # Validate the data structure
-        if not isinstance(position_data, dict):
-            logging.debug("Invalid window position data format")
-            return None
-
-        if 'x' not in position_data or 'y' not in position_data:
-            logging.debug("Missing x or y coordinates in window position data")
-            return None
-
-        x = position_data['x']
-        y = position_data['y']
-
-        # Validate coordinates are numbers
-        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
-            logging.debug("Invalid coordinate types in window position data")
-            return None
-
-        logging.debug(f"Loaded window position: x={x}, y={y}")
-        return (int(x), int(y))
-
-    except Exception as e:
-        # Log error but don't crash the application
-        logging.debug(f"Failed to load window position from JSON: {e}")
-        return None
 
 
 def play_realtime(imgs, args):
@@ -239,17 +176,6 @@ def play_realtime(imgs, args):
     window_name = "PySlidemorpher - Realtime Slideshow"
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
 
-    # Load and set saved window position if available
-    saved_position = load_window_position()
-    if saved_position is not None:
-        x, y = saved_position
-        try:
-            cv2.moveWindow(window_name, x, y)
-            logging.warning(f"Restored window position to: x={x}, y={y}")
-        except Exception as e:
-            logging.debug(f"Failed to set window position: {e}")
-    else:
-        logging.debug("No saved window position found, using default position")
 
     # Enable GPU acceleration if available
     try:
@@ -633,8 +559,6 @@ def play_realtime(imgs, args):
     start_time = time.time()
     frame_count = 0
 
-    # Initialize window position tracking for critical logging
-    previous_window_pos = None
 
     try:
         while True:
@@ -661,24 +585,6 @@ def play_realtime(imgs, args):
                     cv2.imshow(window_name, frame)
                     frame_count += 1
 
-                    # Monitor window position for critical logging
-                    try:
-                        # Get current window position
-                        current_window_pos = cv2.getWindowImageRect(window_name)
-                        if current_window_pos != (-1, -1, -1, -1):  # Valid position returned
-                            window_x, window_y = current_window_pos[0], current_window_pos[1]
-                            current_pos = (window_x, window_y)
-
-                            # Check if position has changed
-                            if previous_window_pos is not None and current_pos != previous_window_pos:
-                                logging.critical(f"Realtime window moved to coordinates: x={window_x}, y={window_y}")
-                                # Save window position to JSON file
-                                save_window_position(window_x, window_y)
-
-                            previous_window_pos = current_pos
-                    except Exception as e:
-                        # Silently handle any errors in position detection
-                        pass
 
                     # Calculate timing for consistent FPS using current settings
                     expected_time = start_time + (frame_count * current_frame_time)
