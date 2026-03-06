@@ -14,7 +14,7 @@ def create_demo_images():
     import numpy as np
     import cv2
 
-    demo_dir = Path("demo_images")
+    demo_dir = Path("../assets/demo_images")
     demo_dir.mkdir(exist_ok=True)
 
     # Create 5 different themed images
@@ -81,35 +81,35 @@ def show_usage_examples():
     print()
 
     print("1. Basic realtime slideshow:")
-    print("   python pyslidemorpher.py demo_images --realtime")
+    print("   python pyslidemorpher.py assets/demo_images --realtime")
     print()
 
     print("2. High-performance realtime slideshow:")
-    print("   python pyslidemorpher.py demo_images --realtime --fps 60 --pixel-size 2")
+    print("   python pyslidemorpher.py assets/demo_images --realtime --fps 60 --pixel-size 2")
     print()
 
     print("3. Slow, detailed transitions:")
-    print("   python pyslidemorpher.py demo_images --realtime --fps 30 --seconds-per-transition 5.0 --pixel-size 8")
+    print("   python pyslidemorpher.py assets/demo_images --realtime --fps 30 --seconds-per-transition 5.0 --pixel-size 8")
     print()
 
     print("4. Different transition effects:")
-    print("   python pyslidemorpher.py demo_images --realtime --transition swarm")
-    print("   python pyslidemorpher.py demo_images --realtime --transition tornado")
-    print("   python pyslidemorpher.py demo_images --realtime --transition drip")
-    print("   python pyslidemorpher.py demo_images --realtime --transition sorted")
+    print("   python pyslidemorpher.py assets/demo_images --realtime --transition swarm")
+    print("   python pyslidemorpher.py assets/demo_images --realtime --transition tornado")
+    print("   python pyslidemorpher.py assets/demo_images --realtime --transition drip")
+    print("   python pyslidemorpher.py assets/demo_images --realtime --transition sorted")
     print()
 
     print("5. Custom resolution and timing:")
-    print("   python pyslidemorpher.py demo_images --realtime --size 1920x1080 --hold 3.0")
+    print("   python pyslidemorpher.py assets/demo_images --realtime --size 1920x1080 --hold 3.0")
     print()
 
     print("6. Web-based GUI control (NEW!):")
-    print("   python pyslidemorpher.py demo_images --realtime --web-gui")
+    print("   python pyslidemorpher.py assets/demo_images --realtime --web-gui")
     print("   Then open http://localhost:5001 in your browser for real-time control!")
     print()
 
     print("7. Web GUI with audio reactive mode:")
-    print("   python pyslidemorpher.py demo_images --realtime --web-gui --audio audio/your_audio.mp3 --reactive")
+    print("   python pyslidemorpher.py assets/demo_images --realtime --web-gui --audio assets/audio/your_audio.mp3 --reactive")
     print()
 
     print("CONTROLS DURING PLAYBACK:")
@@ -148,7 +148,7 @@ def run_demo():
 
         # Run the demo
         cmd = [
-            sys.executable, "pyslidemorpher.py",
+            sys.executable, "../pyslidemorpher.py",
             str(demo_dir),
             "--realtime",
             "--fps", "30",
