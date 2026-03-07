@@ -51,6 +51,8 @@ def main():
                     help="Play slideshow in realtime instead of writing to file")
     ap.add_argument("--reactive", action="store_true",
                     help="Use audio intensity to trigger transitions instead of time (requires --audio and --realtime)")
+    ap.add_argument("--emotional-reactive", action="store_true",
+                    help="Use emotional audio analysis for transitions instead of technical analysis (requires --audio and --realtime)")
     ap.add_argument("--audio-threshold", type=float, default=0.1,
                     help="Audio intensity threshold for triggering transitions in reactive mode (0.0-1.0)")
     ap.add_argument("--use-pytorch", action="store_true",
@@ -62,12 +64,15 @@ def main():
     args = ap.parse_args()
 
     # Validate reactive mode requirements
-    if args.reactive:
+    if args.reactive or args.emotional_reactive:
         if not args.realtime:
-            print("Error: --reactive can only be used with --realtime mode")
+            print("Error: --reactive and --emotional-reactive can only be used with --realtime mode")
             raise SystemExit(1)
         if not args.audio:
-            print("Error: --reactive requires --audio to be specified")
+            print("Error: --reactive and --emotional-reactive require --audio to be specified")
+            raise SystemExit(1)
+        if args.reactive and args.emotional_reactive:
+            print("Error: --reactive and --emotional-reactive cannot be used together. Choose one.")
             raise SystemExit(1)
 
     # Validate audio threshold range

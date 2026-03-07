@@ -30,6 +30,7 @@ class RealtimeController:
             'easing': 'smoothstep',
             'audio_threshold': 0.1,
             'reactive': False,
+            'emotional_reactive': False,
             'paused': False,
             # Enhanced audio reactivity settings
             'tempo_detection': True,
@@ -47,7 +48,12 @@ class RealtimeController:
             'low_freq_threshold': 0.4,
             'high_freq_threshold': 0.3,
             'tempo_smoothing': 0.8,
-            'show_audio_debug': False
+            'show_audio_debug': False,
+            # Emotional reactivity settings
+            'emotional_smoothing': 0.85,
+            'flow_smoothing': 0.7,
+            'emotion_update_rate': 20,
+            'show_emotional_debug': False
         }
         self.settings_lock = threading.Lock()
         self.command_queue = Queue()
@@ -67,13 +73,14 @@ class RealtimeController:
                 elif key in ['seconds_per_transition', 'hold', 'audio_threshold', 'beat_sensitivity', 
                            'peak_sensitivity', 'intensity_sensitivity', 'speed_modulation_range',
                            'pixel_size_modulation_range', 'brightness_modulation_range', 
-                           'low_freq_threshold', 'high_freq_threshold', 'tempo_smoothing']:
+                           'low_freq_threshold', 'high_freq_threshold', 'tempo_smoothing',
+                           'emotional_smoothing', 'flow_smoothing']:
                     value = float(value)
-                elif key == 'pixel_size':
+                elif key in ['pixel_size', 'emotion_update_rate']:
                     value = int(value)
-                elif key in ['reactive', 'paused', 'tempo_detection', 'tempo_to_timing', 
+                elif key in ['reactive', 'emotional_reactive', 'paused', 'tempo_detection', 'tempo_to_timing', 
                            'intensity_to_speed', 'intensity_to_pixel_size', 'frequency_to_easing',
-                           'brightness_modulation', 'show_audio_debug']:
+                           'brightness_modulation', 'show_audio_debug', 'show_emotional_debug']:
                     value = bool(value)
 
                 self.settings[key] = value

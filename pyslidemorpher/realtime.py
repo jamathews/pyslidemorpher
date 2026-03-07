@@ -45,6 +45,13 @@ except ImportError:
     WEB_GUI_AVAILABLE = False
     logging.warning("Web GUI not available - Flask or web_gui module not found")
 
+try:
+    from .emotional_realtime import play_emotional_slideshow
+    EMOTIONAL_AVAILABLE = True
+except ImportError:
+    EMOTIONAL_AVAILABLE = False
+    logging.warning("Emotional reactivity system not available")
+
 
 def get_random_transition_function():
     """Randomly select a transition function from available options.
@@ -88,6 +95,20 @@ def get_random_transition_function():
 
 def play_realtime(imgs, args):
     """Play slideshow in realtime using OpenCV display with optimized performance."""
+    # Check if emotional reactivity is requested
+    if hasattr(args, 'emotional_reactive') and args.emotional_reactive:
+        if EMOTIONAL_AVAILABLE:
+            logging.info("Using emotional audio reactivity system")
+            # Convert imgs to file paths for emotional system
+            image_paths = []
+            if hasattr(args, 'photos_folder'):
+                from .utils import list_images
+                image_paths = list_images(args.photos_folder)
+            play_emotional_slideshow(image_paths, args)
+            return
+        else:
+            logging.error("Emotional reactivity requested but not available. Falling back to traditional system.")
+
     W, H = args.size
     frame_time = 1.0 / args.fps  # Time per frame in seconds
 
@@ -106,6 +127,7 @@ def play_realtime(imgs, args):
             web_controller.update_setting('easing', args.easing)
             web_controller.update_setting('audio_threshold', args.audio_threshold)
             web_controller.update_setting('reactive', args.reactive)
+            web_controller.update_setting('emotional_reactive', getattr(args, 'emotional_reactive', False))
 
             # Start web server
             web_server_thread = start_web_server()
@@ -142,6 +164,7 @@ def play_realtime(imgs, args):
                     self.easing = settings_dict['easing']
                     self.audio_threshold = settings_dict['audio_threshold']
                     self.reactive = settings_dict['reactive']
+                    self.emotional_reactive = settings_dict.get('emotional_reactive', False)
                     # Enhanced audio reactivity settings
                     self.tempo_detection = settings_dict.get('tempo_detection', True)
                     self.tempo_to_timing = settings_dict.get('tempo_to_timing', True)
@@ -159,6 +182,11 @@ def play_realtime(imgs, args):
                     self.high_freq_threshold = settings_dict.get('high_freq_threshold', 0.3)
                     self.tempo_smoothing = settings_dict.get('tempo_smoothing', 0.8)
                     self.show_audio_debug = settings_dict.get('show_audio_debug', False)
+                    # Emotional reactivity settings
+                    self.emotional_smoothing = settings_dict.get('emotional_smoothing', 0.85)
+                    self.flow_smoothing = settings_dict.get('flow_smoothing', 0.7)
+                    self.emotion_update_rate = settings_dict.get('emotion_update_rate', 20)
+                    self.show_emotional_debug = settings_dict.get('show_emotional_debug', False)
             return SettingsNamespace(settings, args)
         return args
 

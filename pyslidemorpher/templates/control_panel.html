@@ -352,9 +352,19 @@
                 <div class="control-item">
                     <div class="checkbox-container">
                         <input type="checkbox" id="reactive">
-                        <label for="reactive">Reactive Mode
+                        <label for="reactive">Traditional Reactive Mode
                             <span class="help-icon">?
-                                <span class="tooltip">When enabled, transitions are triggered by audio events instead of time. The slideshow responds to beats, intensity peaks, and other audio features to create dynamic, music-synchronized visuals.</span>
+                                <span class="tooltip">When enabled, transitions are triggered by technical audio analysis (beats, frequency bands, intensity peaks). Uses precise beat detection and frequency analysis for music-synchronized visuals.</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="emotional-reactive">
+                        <label for="emotional-reactive">Emotional Reactive Mode
+                            <span class="help-icon">?
+                                <span class="tooltip">When enabled, transitions are triggered by emotional interpretation of music rather than technical analysis. Focuses on mood, energy, and aesthetic qualities for more intuitive, beautiful visual responses.</span>
                             </span>
                         </label>
                     </div>
@@ -535,6 +545,48 @@
                     <span class="value-display" id="high-freq-threshold-value">0.30</span>
                 </div>
             </div>
+
+            <!-- Emotional Reactivity Settings -->
+            <div class="control-group">
+                <h3>🎭 Emotional Reactivity</h3>
+                <div class="control-item">
+                    <label for="emotional-smoothing">Emotional Smoothing
+                        <span class="help-icon">?
+                            <span class="tooltip">Controls how much emotional state changes are smoothed over time. Higher values create more stable emotional interpretations but respond slower to mood changes. Lower values are more responsive but may be jittery.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="emotional-smoothing" min="0" max="1" step="0.01" value="0.85">
+                    <span class="value-display" id="emotional-smoothing-value">0.85</span>
+                </div>
+                <div class="control-item">
+                    <label for="flow-smoothing">Flow Smoothing
+                        <span class="help-icon">?
+                            <span class="tooltip">Controls how much the musical flow detection is smoothed. Flow represents how dynamic and changing the music is. Higher values create more stable flow detection, lower values are more sensitive to musical changes.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="flow-smoothing" min="0" max="1" step="0.01" value="0.7">
+                    <span class="value-display" id="flow-smoothing-value">0.70</span>
+                </div>
+                <div class="control-item">
+                    <label for="emotion-update-rate">Emotion Update Rate (Hz)
+                        <span class="help-icon">?
+                            <span class="tooltip">How often the emotional analysis is updated per second. Higher values provide more responsive emotional detection but use more CPU. Lower values are more efficient but less responsive.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="emotion-update-rate" min="5" max="50" step="1" value="20">
+                    <span class="value-display" id="emotion-update-rate-value">20</span>
+                </div>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="show-emotional-debug">
+                        <label for="show-emotional-debug">Show Emotional Debug Info
+                            <span class="help-icon">?
+                                <span class="tooltip">Displays real-time emotional analysis data including energy, valence, texture, flow, and visual parameter mappings. Useful for understanding how the music is being interpreted emotionally.</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="command-buttons">
@@ -596,6 +648,53 @@
                 </div>
             </div>
         </div>
+
+        <!-- Emotional Debug Display -->
+        <div id="emotional-debug" class="control-group" style="display: none; margin-top: 20px;">
+            <h3>🎭 Emotional Debug Info</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                <div class="debug-item">
+                    <label>Energy:</label>
+                    <span id="debug-energy">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Valence:</label>
+                    <span id="debug-valence">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Texture:</label>
+                    <span id="debug-texture">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Density:</label>
+                    <span id="debug-density">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Brightness:</label>
+                    <span id="debug-brightness">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Flow:</label>
+                    <span id="debug-flow">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Transition Type:</label>
+                    <span id="debug-transition-type">default</span>
+                </div>
+                <div class="debug-item">
+                    <label>Duration:</label>
+                    <span id="debug-duration">2.0s</span>
+                </div>
+                <div class="debug-item">
+                    <label>Pixel Size:</label>
+                    <span id="debug-pixel-size">4</span>
+                </div>
+                <div class="debug-item">
+                    <label>Easing:</label>
+                    <span id="debug-easing">linear</span>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -643,7 +742,8 @@
                             'transition', 'easing', 'audio-threshold', 'tempo-smoothing',
                             'beat-sensitivity', 'peak-sensitivity', 'intensity-sensitivity',
                             'speed-modulation-range', 'pixel-size-modulation-range',
-                            'brightness-modulation-range', 'low-freq-threshold', 'high-freq-threshold'];
+                            'brightness-modulation-range', 'low-freq-threshold', 'high-freq-threshold',
+                            'emotional-smoothing', 'flow-smoothing', 'emotion-update-rate'];
 
             controls.forEach(id => {
                 const element = document.getElementById(id);
@@ -656,9 +756,9 @@
             });
 
             // Checkboxes
-            const checkboxes = ['reactive', 'tempo-detection', 'tempo-to-timing', 'intensity-to-speed',
+            const checkboxes = ['reactive', 'emotional-reactive', 'tempo-detection', 'tempo-to-timing', 'intensity-to-speed',
                               'intensity-to-pixel-size', 'frequency-to-easing', 'brightness-modulation',
-                              'show-audio-debug'];
+                              'show-audio-debug', 'show-emotional-debug'];
 
             checkboxes.forEach(id => {
                 const element = document.getElementById(id);
@@ -670,6 +770,24 @@
                         if (id === 'show-audio-debug') {
                             const debugDiv = document.getElementById('audio-debug');
                             debugDiv.style.display = this.checked ? 'block' : 'none';
+                        } else if (id === 'show-emotional-debug') {
+                            const debugDiv = document.getElementById('emotional-debug');
+                            debugDiv.style.display = this.checked ? 'block' : 'none';
+                        }
+
+                        // Mutual exclusivity between reactive modes
+                        if (id === 'reactive' && this.checked) {
+                            const emotionalReactive = document.getElementById('emotional-reactive');
+                            if (emotionalReactive && emotionalReactive.checked) {
+                                emotionalReactive.checked = false;
+                                updateSetting('emotional_reactive', false);
+                            }
+                        } else if (id === 'emotional-reactive' && this.checked) {
+                            const reactive = document.getElementById('reactive');
+                            if (reactive && reactive.checked) {
+                                reactive.checked = false;
+                                updateSetting('reactive', false);
+                            }
                         }
                     });
                 }
@@ -687,10 +805,13 @@
                           id === 'peak-sensitivity' || id === 'intensity-sensitivity' ||
                           id === 'low-freq-threshold' || id === 'high-freq-threshold' ||
                           id === 'tempo-smoothing' || id === 'pixel-size-modulation-range' ||
-                          id === 'brightness-modulation-range') {
+                          id === 'brightness-modulation-range' || id === 'emotional-smoothing' ||
+                          id === 'flow-smoothing') {
                     displayValue = parseFloat(value).toFixed(2);
                 } else if (id === 'speed-modulation-range') {
                     displayValue = parseFloat(value).toFixed(1) + 'x';
+                } else if (id === 'emotion-update-rate') {
+                    displayValue = parseInt(value) + ' Hz';
                 }
                 display.textContent = displayValue;
             }
