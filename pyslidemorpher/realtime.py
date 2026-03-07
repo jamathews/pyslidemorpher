@@ -142,6 +142,23 @@ def play_realtime(imgs, args):
                     self.easing = settings_dict['easing']
                     self.audio_threshold = settings_dict['audio_threshold']
                     self.reactive = settings_dict['reactive']
+                    # Enhanced audio reactivity settings
+                    self.tempo_detection = settings_dict.get('tempo_detection', True)
+                    self.tempo_to_timing = settings_dict.get('tempo_to_timing', True)
+                    self.intensity_to_speed = settings_dict.get('intensity_to_speed', True)
+                    self.intensity_to_pixel_size = settings_dict.get('intensity_to_pixel_size', True)
+                    self.frequency_to_easing = settings_dict.get('frequency_to_easing', True)
+                    self.brightness_modulation = settings_dict.get('brightness_modulation', True)
+                    self.beat_sensitivity = settings_dict.get('beat_sensitivity', 0.3)
+                    self.peak_sensitivity = settings_dict.get('peak_sensitivity', 0.2)
+                    self.intensity_sensitivity = settings_dict.get('intensity_sensitivity', 0.1)
+                    self.speed_modulation_range = settings_dict.get('speed_modulation_range', 2.0)
+                    self.pixel_size_modulation_range = settings_dict.get('pixel_size_modulation_range', 0.5)
+                    self.brightness_modulation_range = settings_dict.get('brightness_modulation_range', 0.1)
+                    self.low_freq_threshold = settings_dict.get('low_freq_threshold', 0.4)
+                    self.high_freq_threshold = settings_dict.get('high_freq_threshold', 0.3)
+                    self.tempo_smoothing = settings_dict.get('tempo_smoothing', 0.8)
+                    self.show_audio_debug = settings_dict.get('show_audio_debug', False)
             return SettingsNamespace(settings, args)
         return args
 
@@ -239,7 +256,8 @@ def play_realtime(imgs, args):
         'high_freq_energy': 0.0,
         'spectral_rolloff': 0.0,
         'zero_crossing_rate': 0.0,
-        'onset_strength': 0.0
+        'onset_strength': 0.0,
+        'estimated_tempo': 0.0
     }
     audio_features_lock = threading.Lock()
 
@@ -248,13 +266,20 @@ def play_realtime(imgs, args):
     intensity_history = deque(maxlen=100)  # Keep last 1 second for dynamic thresholds
     beat_history = deque(maxlen=20)  # Keep last 0.2 seconds for beat detection
 
+    # Tempo detection variables
+    tempo_history = deque(maxlen=10)  # Keep last 10 tempo estimates for smoothing
+    onset_times = deque(maxlen=50)  # Keep last 50 onset times for tempo calculation
+    last_tempo_update = time.time()
+    current_tempo = 0.0
+
     def get_audio_intensity():
         """Enhanced audio analysis with frequency domain features and history tracking."""
         if not audio_initialized or not args.reactive or audio_data is None:
             return {
                 'intensity': 0.0, 'peak': 0.0, 'spectral_centroid': 0.0, 'beat_strength': 0.0,
                 'low_freq_energy': 0.0, 'mid_freq_energy': 0.0, 'high_freq_energy': 0.0,
-                'spectral_rolloff': 0.0, 'zero_crossing_rate': 0.0, 'onset_strength': 0.0
+                'spectral_rolloff': 0.0, 'zero_crossing_rate': 0.0, 'onset_strength': 0.0,
+                'estimated_tempo': 0.0
             }
 
         try:
@@ -264,7 +289,8 @@ def play_realtime(imgs, args):
                 return {
                     'intensity': 0.0, 'peak': 0.0, 'spectral_centroid': 0.0, 'beat_strength': 0.0,
                     'low_freq_energy': 0.0, 'mid_freq_energy': 0.0, 'high_freq_energy': 0.0,
-                    'spectral_rolloff': 0.0, 'zero_crossing_rate': 0.0, 'onset_strength': 0.0
+                    'spectral_rolloff': 0.0, 'zero_crossing_rate': 0.0, 'onset_strength': 0.0,
+                    'estimated_tempo': 0.0
                 }
 
             # Convert position to sample index
@@ -285,7 +311,8 @@ def play_realtime(imgs, args):
                 return {
                     'intensity': 0.0, 'peak': 0.0, 'spectral_centroid': 0.0, 'beat_strength': 0.0,
                     'low_freq_energy': 0.0, 'mid_freq_energy': 0.0, 'high_freq_energy': 0.0,
-                    'spectral_rolloff': 0.0, 'zero_crossing_rate': 0.0, 'onset_strength': 0.0
+                    'spectral_rolloff': 0.0, 'zero_crossing_rate': 0.0, 'onset_strength': 0.0,
+                    'estimated_tempo': 0.0
                 }
 
             # Get audio data and convert to mono if needed
@@ -403,6 +430,46 @@ def play_realtime(imgs, args):
                             beat_strength = np.std(flux) / (np.mean(flux) + 1e-10)
                             beat_strength = min(1.0, beat_strength * 5)
 
+            # Tempo detection using onset strength
+            nonlocal current_tempo, last_tempo_update, onset_times, tempo_history
+            estimated_tempo = current_tempo
+
+            current_time = time.time()
+
+            # Detect onsets (significant increases in onset strength)
+            if onset_strength > 0.2 and beat_strength > 0.3:  # Threshold for onset detection
+                onset_times.append(current_time)
+
+                # Calculate tempo every 2 seconds or when we have enough onsets
+                if (current_time - last_tempo_update > 2.0 and len(onset_times) >= 4) or len(onset_times) >= 20:
+                    # Calculate intervals between onsets
+                    intervals = []
+                    for i in range(1, len(onset_times)):
+                        interval = onset_times[i] - onset_times[i-1]
+                        if 0.2 < interval < 2.0:  # Filter reasonable intervals (30-300 BPM)
+                            intervals.append(interval)
+
+                    if len(intervals) >= 3:
+                        # Calculate tempo from median interval
+                        median_interval = np.median(intervals)
+                        tempo_bpm = 60.0 / median_interval
+
+                        # Filter reasonable tempo range
+                        if 60 <= tempo_bpm <= 200:
+                            tempo_history.append(tempo_bpm)
+
+                            # Smooth tempo using history
+                            if len(tempo_history) > 0:
+                                current_settings = get_current_settings()
+                                smoothing = current_settings.tempo_smoothing if hasattr(current_settings, 'tempo_smoothing') else 0.8
+                                if len(tempo_history) == 1:
+                                    estimated_tempo = tempo_bpm
+                                else:
+                                    estimated_tempo = smoothing * current_tempo + (1 - smoothing) * tempo_bpm
+                                current_tempo = estimated_tempo
+
+                    last_tempo_update = current_time
+
             # Store in history for adaptive behavior
             current_features = {
                 'intensity': intensity,
@@ -414,7 +481,8 @@ def play_realtime(imgs, args):
                 'high_freq_energy': high_freq_energy,
                 'spectral_rolloff': spectral_rolloff,
                 'zero_crossing_rate': zero_crossing_rate,
-                'onset_strength': onset_strength
+                'onset_strength': onset_strength,
+                'estimated_tempo': estimated_tempo
             }
 
             # Update history
@@ -429,7 +497,8 @@ def play_realtime(imgs, args):
             return {
                 'intensity': 0.0, 'peak': 0.0, 'spectral_centroid': 0.0, 'beat_strength': 0.0,
                 'low_freq_energy': 0.0, 'mid_freq_energy': 0.0, 'high_freq_energy': 0.0,
-                'spectral_rolloff': 0.0, 'zero_crossing_rate': 0.0, 'onset_strength': 0.0
+                'spectral_rolloff': 0.0, 'zero_crossing_rate': 0.0, 'onset_strength': 0.0,
+                'estimated_tempo': 0.0
             }
 
     def audio_monitor():
@@ -446,6 +515,10 @@ def play_realtime(imgs, args):
                 features = get_audio_intensity()
                 with audio_features_lock:
                     audio_features = features
+
+                # Share audio features with web controller for debug display
+                if web_controller:
+                    web_controller.audio_features = features
                 time.sleep(0.01)  # Update every 10ms
             except Exception as e:
                 logging.debug(f"Error in audio monitoring: {e}")
@@ -559,20 +632,27 @@ def play_realtime(imgs, args):
                 current_time = time.time()
                 time_since_last = current_time - last_trigger_time
 
-                # Update dynamic thresholds based on recent history
+                # Update dynamic thresholds based on recent history and user settings
                 if len(intensity_history) > 10:
                     recent_avg = np.mean(list(intensity_history)[-20:])  # Last 0.2 seconds
-                    dynamic_intensity_threshold = max(0.05, recent_avg * 1.2)  # 20% above recent average
+                    dynamic_intensity_threshold = max(current_settings.intensity_sensitivity, recent_avg * 1.2)
+                else:
+                    dynamic_intensity_threshold = current_settings.intensity_sensitivity
 
                 if len(beat_history) > 5:
                     recent_beat_avg = np.mean(list(beat_history)[-10:])  # Last 0.1 seconds
-                    dynamic_beat_threshold = max(0.2, recent_beat_avg * 1.5)  # 50% above recent average
+                    dynamic_beat_threshold = max(current_settings.beat_sensitivity, recent_beat_avg * 1.5)
+                else:
+                    dynamic_beat_threshold = current_settings.beat_sensitivity
+
+                # Use user-configurable peak sensitivity
+                dynamic_peak_threshold = current_settings.peak_sensitivity
 
                 # Calculate adaptive minimum interval based on beat strength
                 beat_factor = min(2.0, max(0.5, current_features['beat_strength'] * 3))
                 current_min_interval = base_min_interval / beat_factor
 
-                # Multiple trigger types
+                # Multiple trigger types with user-configurable sensitivities
                 intensity_trigger = (current_features['intensity'] >= 
                                    max(current_settings.audio_threshold, dynamic_intensity_threshold))
 
@@ -608,37 +688,59 @@ def play_realtime(imgs, args):
                     else:
                         transition_fn = get_transition_function(current_settings.transition)
 
-                    # Audio-responsive transition parameters
+                    # Audio-responsive transition parameters with user-configurable mappings
 
-                    # Speed modulation: louder audio = faster transitions (0.5x to 2.0x)
-                    intensity_factor = min(2.0, max(0.5, current_features['intensity'] * 2))
-                    beat_factor = min(1.5, max(0.8, current_features['beat_strength'] * 2))
-                    speed_multiplier = (intensity_factor + beat_factor) / 2
+                    # Initialize with base settings
+                    adaptive_seconds = current_settings.seconds_per_transition
+                    adaptive_pixel_size = current_settings.pixel_size
+                    adaptive_easing = current_settings.easing
 
-                    adaptive_seconds = current_settings.seconds_per_transition / speed_multiplier
-                    adaptive_seconds = max(0.2, min(3.0, adaptive_seconds))  # Clamp to reasonable range
+                    # Tempo-based timing (if enabled)
+                    if current_settings.tempo_detection and current_settings.tempo_to_timing:
+                        if current_features['estimated_tempo'] > 0:
+                            # Map tempo to transition timing (faster tempo = faster transitions)
+                            tempo_factor = current_features['estimated_tempo'] / 120.0  # Normalize to 120 BPM
+                            tempo_factor = min(2.0, max(0.5, tempo_factor))  # Clamp to reasonable range
+                            adaptive_seconds = current_settings.seconds_per_transition / tempo_factor
 
-                    # Detail level: higher intensity = smaller pixels (more detail)
-                    intensity_pixel_factor = max(0.5, 1.0 - (current_features['intensity'] * 0.5))
-                    adaptive_pixel_size = int(current_settings.pixel_size * intensity_pixel_factor)
-                    adaptive_pixel_size = max(2, min(50, adaptive_pixel_size))  # Clamp to reasonable range
+                    # Speed modulation based on intensity (if enabled)
+                    if current_settings.intensity_to_speed:
+                        max_range = current_settings.speed_modulation_range
+                        min_range = 1.0 / max_range
 
-                    # Frequency-based effects
-                    # High frequency content affects easing
-                    if current_features['high_freq_energy'] > 0.3:
-                        # Use sharper easing for high-frequency content
-                        adaptive_easing = "ease_in_out_cubic" if current_settings.easing == "linear" else current_settings.easing
-                    elif current_features['low_freq_energy'] > 0.4:
-                        # Use smoother easing for bass-heavy content
-                        adaptive_easing = "ease_in_out_sine" if current_settings.easing == "linear" else current_settings.easing
-                    else:
-                        adaptive_easing = current_settings.easing
+                        intensity_factor = min(max_range, max(min_range, current_features['intensity'] * max_range))
+                        beat_factor = min(max_range * 0.75, max(min_range * 1.25, current_features['beat_strength'] * max_range * 0.75))
+                        speed_multiplier = (intensity_factor + beat_factor) / 2
+
+                        adaptive_seconds = adaptive_seconds / speed_multiplier
+
+                    # Clamp adaptive seconds to reasonable range
+                    adaptive_seconds = max(0.2, min(10.0, adaptive_seconds))
+
+                    # Detail level: higher intensity = smaller pixels (if enabled)
+                    if current_settings.intensity_to_pixel_size:
+                        modulation_range = current_settings.pixel_size_modulation_range
+                        intensity_pixel_factor = max(1.0 - modulation_range, 1.0 - (current_features['intensity'] * modulation_range))
+                        adaptive_pixel_size = int(current_settings.pixel_size * intensity_pixel_factor)
+                        adaptive_pixel_size = max(1, min(50, adaptive_pixel_size))  # Clamp to reasonable range
+
+                    # Frequency-based easing effects (if enabled)
+                    if current_settings.frequency_to_easing:
+                        high_threshold = current_settings.high_freq_threshold
+                        low_threshold = current_settings.low_freq_threshold
+
+                        if current_features['high_freq_energy'] > high_threshold:
+                            # Use sharper easing for high-frequency content
+                            adaptive_easing = "ease_in_out_cubic" if current_settings.easing == "linear" else current_settings.easing
+                        elif current_features['low_freq_energy'] > low_threshold:
+                            # Use smoother easing for bass-heavy content
+                            adaptive_easing = "ease_in_out_sine" if current_settings.easing == "linear" else current_settings.easing
 
                     # Log which transition is being used with adaptive parameters
+                    tempo_info = f", tempo={current_features['estimated_tempo']:.1f}BPM" if current_settings.tempo_detection else ""
                     logging.info(f"Using transition: {transition_fn.__name__} with adaptive params: "
-                               f"seconds={adaptive_seconds:.2f} (speed={speed_multiplier:.2f}x), "
-                               f"pixel_size={adaptive_pixel_size} (factor={intensity_pixel_factor:.2f}), "
-                               f"easing={adaptive_easing}")
+                               f"seconds={adaptive_seconds:.2f}, pixel_size={adaptive_pixel_size}, "
+                               f"easing={adaptive_easing}{tempo_info}")
 
                     # Generate transition frames with audio-responsive parameters
                     transition_frames = list(transition_fn(
@@ -677,17 +779,21 @@ def play_realtime(imgs, args):
 
                         frame_buffer.put(current_frame_bgr)
                 elif in_hold:
-                    # In hold period, display current image with subtle brightness modulation
+                    # In hold period, display current image with configurable brightness modulation
                     frame = imgs[current_img_idx].copy()
 
-                    # Subtle brightness modulation based on audio intensity
-                    brightness_factor = 1.0 + (current_features['intensity'] * 0.1)  # Up to 10% brighter
-                    brightness_factor = min(1.15, max(0.95, brightness_factor))  # Clamp to subtle range
+                    # Configurable brightness modulation based on audio intensity
+                    if current_settings.brightness_modulation:
+                        modulation_range = current_settings.brightness_modulation_range
+                        brightness_factor = 1.0 + (current_features['intensity'] * modulation_range)
+                        max_brightness = 1.0 + modulation_range
+                        min_brightness = 1.0 - modulation_range * 0.5  # Less dimming than brightening
+                        brightness_factor = min(max_brightness, max(min_brightness, brightness_factor))
 
-                    if brightness_factor != 1.0:
-                        frame = frame.astype(np.float32)
-                        frame *= brightness_factor
-                        frame = np.clip(frame, 0, 255).astype(np.uint8)
+                        if brightness_factor != 1.0:
+                            frame = frame.astype(np.float32)
+                            frame *= brightness_factor
+                            frame = np.clip(frame, 0, 255).astype(np.uint8)
 
                     frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                     frame_buffer.put(frame_bgr)
@@ -696,17 +802,21 @@ def play_realtime(imgs, args):
                         in_hold = False
                         logging.debug("Hold period complete")
                 else:
-                    # No transition, no hold, display current image with brightness modulation
+                    # No transition, no hold, display current image with configurable brightness modulation
                     frame = imgs[current_img_idx].copy()
 
-                    # Subtle brightness modulation based on audio intensity
-                    brightness_factor = 1.0 + (current_features['intensity'] * 0.1)  # Up to 10% brighter
-                    brightness_factor = min(1.15, max(0.95, brightness_factor))  # Clamp to subtle range
+                    # Configurable brightness modulation based on audio intensity
+                    if current_settings.brightness_modulation:
+                        modulation_range = current_settings.brightness_modulation_range
+                        brightness_factor = 1.0 + (current_features['intensity'] * modulation_range)
+                        max_brightness = 1.0 + modulation_range
+                        min_brightness = 1.0 - modulation_range * 0.5  # Less dimming than brightening
+                        brightness_factor = min(max_brightness, max(min_brightness, brightness_factor))
 
-                    if brightness_factor != 1.0:
-                        frame = frame.astype(np.float32)
-                        frame *= brightness_factor
-                        frame = np.clip(frame, 0, 255).astype(np.uint8)
+                        if brightness_factor != 1.0:
+                            frame = frame.astype(np.float32)
+                            frame *= brightness_factor
+                            frame = np.clip(frame, 0, 255).astype(np.uint8)
 
                     frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                     frame_buffer.put(frame_bgr)

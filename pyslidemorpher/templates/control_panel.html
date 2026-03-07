@@ -164,6 +164,82 @@
             accent-color: #fff;
         }
 
+        .debug-item {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 8px;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .debug-item label {
+            font-size: 12px;
+            margin: 0;
+            opacity: 0.8;
+        }
+
+        .debug-item span {
+            font-weight: bold;
+            font-family: monospace;
+            color: #00ff88;
+        }
+
+        .help-icon {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            text-align: center;
+            line-height: 16px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 8px;
+            cursor: help;
+            position: relative;
+        }
+
+        .help-icon:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
+
+        .tooltip {
+            visibility: hidden;
+            width: 250px;
+            background-color: rgba(0, 0, 0, 0.9);
+            color: #fff;
+            text-align: left;
+            border-radius: 6px;
+            padding: 8px;
+            position: absolute;
+            z-index: 1000;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -125px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 12px;
+            line-height: 1.4;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .tooltip::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: rgba(0, 0, 0, 0.9) transparent transparent transparent;
+        }
+
+        .help-icon:hover .tooltip {
+            visibility: visible;
+            opacity: 1;
+        }
+
         @media (max-width: 768px) {
             .container {
                 padding: 20px;
@@ -193,12 +269,20 @@
             <div class="control-group">
                 <h3>⚡ Performance</h3>
                 <div class="control-item">
-                    <label for="fps">FPS (Frames Per Second)</label>
+                    <label for="fps">FPS (Frames Per Second)
+                        <span class="help-icon">?
+                            <span class="tooltip">Controls how many frames are displayed per second. Higher values create smoother motion but require more processing power. Lower values save resources but may appear choppy.</span>
+                        </span>
+                    </label>
                     <input type="range" id="fps" min="10" max="120" value="60">
                     <span class="value-display" id="fps-value">30</span>
                 </div>
                 <div class="control-item">
-                    <label for="pixel-size">Pixel Size</label>
+                    <label for="pixel-size">Pixel Size
+                        <span class="help-icon">?
+                            <span class="tooltip">Size of individual pixels in the transition effect. Smaller values create more detailed, fine-grained transitions but require more processing. Larger values create blockier, more abstract effects that render faster.</span>
+                        </span>
+                    </label>
                     <input type="range" id="pixel-size" min="1" max="50" value="4">
                     <span class="value-display" id="pixel-size-value">4</span>
                 </div>
@@ -208,12 +292,20 @@
             <div class="control-group">
                 <h3>⏱️ Timing</h3>
                 <div class="control-item">
-                    <label for="seconds-per-transition">Seconds Per Transition</label>
+                    <label for="seconds-per-transition">Seconds Per Transition
+                        <span class="help-icon">?
+                            <span class="tooltip">Duration of each transition between images. Longer transitions create slower, more gradual morphing effects. Shorter transitions create quick, snappy changes. In reactive mode, this can be modified by audio intensity.</span>
+                        </span>
+                    </label>
                     <input type="range" id="seconds-per-transition" min="0.5" max="60" step="0.1" value="2.0">
                     <span class="value-display" id="seconds-per-transition-value">2.0s</span>
                 </div>
                 <div class="control-item">
-                    <label for="hold">Hold Time</label>
+                    <label for="hold">Hold Time
+                        <span class="help-icon">?
+                            <span class="tooltip">How long each image is displayed after the transition completes before starting the next transition. Longer hold times give viewers more time to appreciate each image.</span>
+                        </span>
+                    </label>
                     <input type="range" id="hold" min="0" max="30" step="0.1" value="0.5">
                     <span class="value-display" id="hold-value">0.5s</span>
                 </div>
@@ -223,7 +315,11 @@
             <div class="control-group">
                 <h3>🎨 Visual Effects</h3>
                 <div class="control-item">
-                    <label for="transition">Transition Type</label>
+                    <label for="transition">Transition Type
+                        <span class="help-icon">?
+                            <span class="tooltip">The visual effect used to morph between images. Default uses pixel-based morphing, Swarm creates particle-like movement, Tornado/Swirl add rotational effects, Drip/Rain simulate liquid effects, Sorted arranges pixels by brightness/color, and Random picks a different effect each time.</span>
+                        </span>
+                    </label>
                     <select id="transition">
                         <option value="default">Default</option>
                         <option value="swarm">Swarm</option>
@@ -237,7 +333,11 @@
                     </select>
                 </div>
                 <div class="control-item">
-                    <label for="easing">Easing Function</label>
+                    <label for="easing">Easing Function
+                        <span class="help-icon">?
+                            <span class="tooltip">Controls the timing curve of transitions. Linear creates constant speed, Smooth Step starts slow, speeds up, then slows down for natural motion, and Cubic creates more dramatic acceleration/deceleration curves. In reactive mode, this can be influenced by audio frequency content.</span>
+                        </span>
+                    </label>
                     <select id="easing">
                         <option value="linear">Linear</option>
                         <option value="smoothstep">Smooth Step</option>
@@ -248,17 +348,191 @@
 
             <!-- Audio Settings -->
             <div class="control-group">
-                <h3>🔊 Audio</h3>
+                <h3>🔊 Audio Reactivity</h3>
                 <div class="control-item">
                     <div class="checkbox-container">
                         <input type="checkbox" id="reactive">
-                        <label for="reactive">Reactive Mode</label>
+                        <label for="reactive">Reactive Mode
+                            <span class="help-icon">?
+                                <span class="tooltip">When enabled, transitions are triggered by audio events instead of time. The slideshow responds to beats, intensity peaks, and other audio features to create dynamic, music-synchronized visuals.</span>
+                            </span>
+                        </label>
                     </div>
                 </div>
                 <div class="control-item">
-                    <label for="audio-threshold">Audio Threshold</label>
+                    <label for="audio-threshold">Base Audio Threshold
+                        <span class="help-icon">?
+                            <span class="tooltip">Minimum audio intensity level required to trigger transitions. Lower values make the slideshow more sensitive to quiet sounds, higher values require louder audio to trigger changes. The system also uses adaptive thresholds based on recent audio history.</span>
+                        </span>
+                    </label>
                     <input type="range" id="audio-threshold" min="0" max="1" step="0.01" value="0.1">
                     <span class="value-display" id="audio-threshold-value">0.10</span>
+                </div>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="show-audio-debug">
+                        <label for="show-audio-debug">Show Audio Debug Info
+                            <span class="help-icon">?
+                                <span class="tooltip">Displays real-time audio analysis data including intensity, frequency content, beat detection, and tempo estimation. Useful for understanding how the audio is being analyzed and fine-tuning sensitivity settings.</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audio Analysis Features -->
+            <div class="control-group">
+                <h3>🎵 Audio Analysis</h3>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="tempo-detection">
+                        <label for="tempo-detection">Tempo Detection
+                            <span class="help-icon">?
+                                <span class="tooltip">Analyzes audio to detect the tempo (beats per minute). When enabled, the system tracks onset patterns to estimate the music's tempo, which can then be used to synchronize transition timing with the beat.</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <label for="tempo-smoothing">Tempo Smoothing
+                        <span class="help-icon">?
+                            <span class="tooltip">Controls how much the detected tempo is smoothed over time. Higher values create more stable tempo estimates but respond slower to tempo changes. Lower values are more responsive but may be jittery.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="tempo-smoothing" min="0" max="1" step="0.1" value="0.8">
+                    <span class="value-display" id="tempo-smoothing-value">0.8</span>
+                </div>
+                <div class="control-item">
+                    <label for="beat-sensitivity">Beat Sensitivity
+                        <span class="help-icon">?
+                            <span class="tooltip">Threshold for detecting beats and rhythmic events. Lower values detect more subtle beats, higher values only respond to strong beats. Affects how often beat-triggered transitions occur.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="beat-sensitivity" min="0" max="1" step="0.01" value="0.3">
+                    <span class="value-display" id="beat-sensitivity-value">0.30</span>
+                </div>
+                <div class="control-item">
+                    <label for="peak-sensitivity">Peak Sensitivity
+                        <span class="help-icon">?
+                            <span class="tooltip">Threshold for detecting sudden volume peaks in the audio. Lower values trigger on smaller peaks, higher values only respond to dramatic volume spikes. Peak detection can trigger immediate transitions.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="peak-sensitivity" min="0" max="1" step="0.01" value="0.2">
+                    <span class="value-display" id="peak-sensitivity-value">0.20</span>
+                </div>
+                <div class="control-item">
+                    <label for="intensity-sensitivity">Intensity Sensitivity
+                        <span class="help-icon">?
+                            <span class="tooltip">Minimum change in audio intensity required to trigger adaptive behavior. Lower values make the system more responsive to subtle audio changes, higher values require more dramatic intensity changes.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="intensity-sensitivity" min="0" max="1" step="0.01" value="0.1">
+                    <span class="value-display" id="intensity-sensitivity-value">0.10</span>
+                </div>
+            </div>
+
+            <!-- Audio-to-Visual Mappings -->
+            <div class="control-group">
+                <h3>🎨 Audio-to-Visual Mappings</h3>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="tempo-to-timing">
+                        <label for="tempo-to-timing">Tempo → Transition Timing
+                            <span class="help-icon">?
+                                <span class="tooltip">Maps detected audio tempo to transition timing. Faster music creates quicker transitions, slower music creates longer transitions. Helps synchronize the visual pace with the musical tempo.</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="intensity-to-speed">
+                        <label for="intensity-to-speed">Intensity → Speed
+                            <span class="help-icon">?
+                                <span class="tooltip">Maps audio intensity to transition speed. Louder, more intense audio creates faster transitions, while quieter sections slow down the transitions. Creates dynamic pacing that follows the music's energy.</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <label for="speed-modulation-range">Speed Modulation Range
+                        <span class="help-icon">?
+                            <span class="tooltip">Maximum factor by which audio intensity can speed up or slow down transitions. 2.0x means transitions can be up to twice as fast or half as slow as the base timing. Higher values create more dramatic speed variations.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="speed-modulation-range" min="1" max="5" step="0.1" value="2.0">
+                    <span class="value-display" id="speed-modulation-range-value">2.0x</span>
+                </div>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="intensity-to-pixel-size">
+                        <label for="intensity-to-pixel-size">Intensity → Pixel Size
+                            <span class="help-icon">?
+                                <span class="tooltip">Maps audio intensity to pixel size detail. Higher intensity creates smaller pixels (more detail), lower intensity uses larger pixels (more abstract). Creates visual complexity that matches audio complexity.</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <label for="pixel-size-modulation-range">Pixel Size Modulation
+                        <span class="help-icon">?
+                            <span class="tooltip">How much audio intensity can reduce pixel size from the base setting. 0.5 means pixels can be reduced to half their base size during intense audio. Higher values create more dramatic detail changes.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="pixel-size-modulation-range" min="0.1" max="1" step="0.1" value="0.5">
+                    <span class="value-display" id="pixel-size-modulation-range-value">0.5</span>
+                </div>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="frequency-to-easing">
+                        <label for="frequency-to-easing">Frequency → Easing
+                            <span class="help-icon">?
+                                <span class="tooltip">Maps audio frequency content to easing curves. High-frequency content (treble) creates sharper, more dramatic easing curves, while low-frequency content (bass) creates smoother, more flowing curves.</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="brightness-modulation">
+                        <label for="brightness-modulation">Brightness Modulation
+                            <span class="help-icon">?
+                                <span class="tooltip">Modulates image brightness based on audio intensity. Creates a subtle pulsing or breathing effect where images get brighter during loud sections and dimmer during quiet sections.</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <label for="brightness-modulation-range">Brightness Range
+                        <span class="help-icon">?
+                            <span class="tooltip">Maximum amount brightness can be increased during intense audio. 0.1 means images can be up to 10% brighter during loud sections. Higher values create more dramatic brightness effects.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="brightness-modulation-range" min="0" max="0.5" step="0.01" value="0.1">
+                    <span class="value-display" id="brightness-modulation-range-value">0.10</span>
+                </div>
+            </div>
+
+            <!-- Frequency Analysis -->
+            <div class="control-group">
+                <h3>🎼 Frequency Analysis</h3>
+                <div class="control-item">
+                    <label for="low-freq-threshold">Low Frequency Threshold
+                        <span class="help-icon">?
+                            <span class="tooltip">Threshold for detecting significant low-frequency (bass) content in the audio. When bass energy exceeds this level, it can trigger smoother easing curves and influence visual effects. Lower values are more sensitive to bass.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="low-freq-threshold" min="0" max="1" step="0.01" value="0.4">
+                    <span class="value-display" id="low-freq-threshold-value">0.40</span>
+                </div>
+                <div class="control-item">
+                    <label for="high-freq-threshold">High Frequency Threshold
+                        <span class="help-icon">?
+                            <span class="tooltip">Threshold for detecting significant high-frequency (treble) content in the audio. When treble energy exceeds this level, it can trigger sharper easing curves and more detailed visual effects. Lower values are more sensitive to treble.</span>
+                        </span>
+                    </label>
+                    <input type="range" id="high-freq-threshold" min="0" max="1" step="0.01" value="0.3">
+                    <span class="value-display" id="high-freq-threshold-value">0.30</span>
                 </div>
             </div>
         </div>
@@ -274,6 +548,53 @@
 
         <div class="status-bar">
             <div id="status">Ready - Waiting for slideshow...</div>
+        </div>
+
+        <!-- Audio Debug Display -->
+        <div id="audio-debug" class="control-group" style="display: none; margin-top: 20px;">
+            <h3>🎧 Audio Debug Info</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                <div class="debug-item">
+                    <label>Intensity:</label>
+                    <span id="debug-intensity">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Peak:</label>
+                    <span id="debug-peak">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Beat Strength:</label>
+                    <span id="debug-beat">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Onset Strength:</label>
+                    <span id="debug-onset">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Low Freq:</label>
+                    <span id="debug-low-freq">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Mid Freq:</label>
+                    <span id="debug-mid-freq">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>High Freq:</label>
+                    <span id="debug-high-freq">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Spectral Centroid:</label>
+                    <span id="debug-centroid">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Zero Crossing:</label>
+                    <span id="debug-zcr">0.00</span>
+                </div>
+                <div class="debug-item">
+                    <label>Estimated Tempo:</label>
+                    <span id="debug-tempo">-- BPM</span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -319,7 +640,10 @@
         function setupEventListeners() {
             // Range inputs and selects
             const controls = ['fps', 'pixel-size', 'seconds-per-transition', 'hold', 
-                            'transition', 'easing', 'audio-threshold'];
+                            'transition', 'easing', 'audio-threshold', 'tempo-smoothing',
+                            'beat-sensitivity', 'peak-sensitivity', 'intensity-sensitivity',
+                            'speed-modulation-range', 'pixel-size-modulation-range',
+                            'brightness-modulation-range', 'low-freq-threshold', 'high-freq-threshold'];
 
             controls.forEach(id => {
                 const element = document.getElementById(id);
@@ -331,9 +655,24 @@
                 }
             });
 
-            // Checkbox
-            document.getElementById('reactive').addEventListener('change', function() {
-                updateSetting('reactive', this.checked);
+            // Checkboxes
+            const checkboxes = ['reactive', 'tempo-detection', 'tempo-to-timing', 'intensity-to-speed',
+                              'intensity-to-pixel-size', 'frequency-to-easing', 'brightness-modulation',
+                              'show-audio-debug'];
+
+            checkboxes.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.addEventListener('change', function() {
+                        updateSetting(id.replaceAll('-', '_'), this.checked);
+
+                        // Special handling for debug display
+                        if (id === 'show-audio-debug') {
+                            const debugDiv = document.getElementById('audio-debug');
+                            debugDiv.style.display = this.checked ? 'block' : 'none';
+                        }
+                    });
+                }
             });
         }
 
@@ -344,8 +683,14 @@
                 let displayValue = value;
                 if (id === 'seconds-per-transition' || id === 'hold') {
                     displayValue = parseFloat(value).toFixed(1) + 's';
-                } else if (id === 'audio-threshold') {
+                } else if (id === 'audio-threshold' || id === 'beat-sensitivity' || 
+                          id === 'peak-sensitivity' || id === 'intensity-sensitivity' ||
+                          id === 'low-freq-threshold' || id === 'high-freq-threshold' ||
+                          id === 'tempo-smoothing' || id === 'pixel-size-modulation-range' ||
+                          id === 'brightness-modulation-range') {
                     displayValue = parseFloat(value).toFixed(2);
+                } else if (id === 'speed-modulation-range') {
+                    displayValue = parseFloat(value).toFixed(1) + 'x';
                 }
                 display.textContent = displayValue;
             }
@@ -416,6 +761,49 @@
                     updateStatus('Disconnected');
                 }
             }, 5000);
+
+            // Start audio debug updates if enabled
+            startAudioDebugUpdates();
+        }
+
+        // Update audio debug display
+        async function updateAudioDebug() {
+            try {
+                const response = await fetch('/api/audio-debug');
+                if (response.ok) {
+                    const audioData = await response.json();
+
+                    // Update debug display elements
+                    document.getElementById('debug-intensity').textContent = audioData.intensity.toFixed(3);
+                    document.getElementById('debug-peak').textContent = audioData.peak.toFixed(3);
+                    document.getElementById('debug-beat').textContent = audioData.beat_strength.toFixed(3);
+                    document.getElementById('debug-onset').textContent = audioData.onset_strength.toFixed(3);
+                    document.getElementById('debug-low-freq').textContent = audioData.low_freq_energy.toFixed(3);
+                    document.getElementById('debug-mid-freq').textContent = audioData.mid_freq_energy.toFixed(3);
+                    document.getElementById('debug-high-freq').textContent = audioData.high_freq_energy.toFixed(3);
+                    document.getElementById('debug-centroid').textContent = audioData.spectral_centroid.toFixed(3);
+                    document.getElementById('debug-zcr').textContent = audioData.zero_crossing_rate.toFixed(3);
+
+                    const tempoDisplay = audioData.estimated_tempo > 0 ? 
+                        audioData.estimated_tempo.toFixed(1) + ' BPM' : '-- BPM';
+                    document.getElementById('debug-tempo').textContent = tempoDisplay;
+                }
+            } catch (error) {
+                console.debug('Audio debug update failed:', error);
+            }
+        }
+
+        // Start periodic audio debug updates
+        function startAudioDebugUpdates() {
+            setInterval(() => {
+                const debugDiv = document.getElementById('audio-debug');
+                const showDebug = document.getElementById('show-audio-debug');
+
+                // Only update if debug display is visible and reactive mode is enabled
+                if (debugDiv.style.display !== 'none' && showDebug && showDebug.checked && settings.reactive) {
+                    updateAudioDebug();
+                }
+            }, 100); // Update every 100ms for responsive display
         }
     </script>
 </body>

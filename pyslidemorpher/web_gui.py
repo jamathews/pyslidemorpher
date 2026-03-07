@@ -30,7 +30,24 @@ class RealtimeController:
             'easing': 'smoothstep',
             'audio_threshold': 0.1,
             'reactive': False,
-            'paused': False
+            'paused': False,
+            # Enhanced audio reactivity settings
+            'tempo_detection': True,
+            'tempo_to_timing': True,
+            'intensity_to_speed': True,
+            'intensity_to_pixel_size': True,
+            'frequency_to_easing': True,
+            'brightness_modulation': True,
+            'beat_sensitivity': 0.3,
+            'peak_sensitivity': 0.2,
+            'intensity_sensitivity': 0.1,
+            'speed_modulation_range': 2.0,
+            'pixel_size_modulation_range': 0.5,
+            'brightness_modulation_range': 0.1,
+            'low_freq_threshold': 0.4,
+            'high_freq_threshold': 0.3,
+            'tempo_smoothing': 0.8,
+            'show_audio_debug': False
         }
         self.settings_lock = threading.Lock()
         self.command_queue = Queue()
@@ -47,11 +64,16 @@ class RealtimeController:
                 # Type conversion based on expected types
                 if key == 'fps':
                     value = int(value)
-                elif key in ['seconds_per_transition', 'hold', 'audio_threshold']:
+                elif key in ['seconds_per_transition', 'hold', 'audio_threshold', 'beat_sensitivity', 
+                           'peak_sensitivity', 'intensity_sensitivity', 'speed_modulation_range',
+                           'pixel_size_modulation_range', 'brightness_modulation_range', 
+                           'low_freq_threshold', 'high_freq_threshold', 'tempo_smoothing']:
                     value = float(value)
                 elif key == 'pixel_size':
                     value = int(value)
-                elif key in ['reactive', 'paused']:
+                elif key in ['reactive', 'paused', 'tempo_detection', 'tempo_to_timing', 
+                           'intensity_to_speed', 'intensity_to_pixel_size', 'frequency_to_easing',
+                           'brightness_modulation', 'show_audio_debug']:
                     value = bool(value)
 
                 self.settings[key] = value
@@ -138,6 +160,20 @@ def create_web_app():
             return jsonify({'status': 'success', 'command': command})
         else:
             return jsonify({'error': 'Invalid command'}), 400
+
+    @app.route('/api/audio-debug', methods=['GET'])
+    def get_audio_debug():
+        """API endpoint to get real-time audio analysis data."""
+        # This will be populated by the realtime module when available
+        if hasattr(controller, 'audio_features'):
+            return jsonify(controller.audio_features)
+        else:
+            return jsonify({
+                'intensity': 0.0, 'peak': 0.0, 'spectral_centroid': 0.0, 'beat_strength': 0.0,
+                'low_freq_energy': 0.0, 'mid_freq_energy': 0.0, 'high_freq_energy': 0.0,
+                'spectral_rolloff': 0.0, 'zero_crossing_rate': 0.0, 'onset_strength': 0.0,
+                'estimated_tempo': 0.0
+            })
 
     return app
 
