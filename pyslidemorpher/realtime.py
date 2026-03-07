@@ -1,3 +1,4 @@
+
 """
 Real-time playback functionality for PySlide Morpher.
 Handles live slideshow display using OpenCV.
@@ -118,6 +119,9 @@ def play_realtime(imgs, args):
     elif hasattr(args, 'web_gui') and args.web_gui and not WEB_GUI_AVAILABLE:
         logging.error("Web GUI requested but Flask is not available. Install Flask to use web GUI.")
 
+    # Track previous settings for change detection
+    previous_settings = None
+
     def get_current_settings():
         """Get current settings from web controller or fallback to args."""
         if web_controller:
@@ -139,6 +143,41 @@ def play_realtime(imgs, args):
                     self.reactive = settings_dict['reactive']
             return SettingsNamespace(settings, args)
         return args
+
+    def check_and_log_settings_changes():
+        """Check if settings have changed and log the entire settings JSON if they have."""
+        nonlocal previous_settings
+        
+        current_settings = get_current_settings()
+        
+        # Convert current settings to a comparable dictionary
+        current_dict = {}
+        if web_controller:
+            current_dict = web_controller.get_settings().copy()
+        else:
+            # Extract relevant settings from args
+            current_dict = {
+                'fps': current_settings.fps,
+                'seconds_per_transition': current_settings.seconds_per_transition,
+                'hold': current_settings.hold,
+                'pixel_size': current_settings.pixel_size,
+                'transition': current_settings.transition,
+                'easing': current_settings.easing,
+                'audio_threshold': current_settings.audio_threshold,
+                'reactive': current_settings.reactive,
+            }
+        
+        # Compare with previous settings
+        if previous_settings is None:
+            # First time - just store current settings without logging
+            previous_settings = current_dict.copy()
+        elif previous_settings != current_dict:
+            # Settings have changed - log the entire settings JSON
+            settings_json = json.dumps(current_dict, indent=2)
+            logging.warning(f"Settings changed:\n{settings_json}")
+            previous_settings = current_dict.copy()
+        
+        return current_settings
 
     # Log realtime mode start at WARNING level so it's always visible
     logging.warning(f"Starting realtime slideshow with {len(imgs)-1} images at {args.fps} fps ({W}x{H})")
@@ -281,7 +320,7 @@ def play_realtime(imgs, args):
         while audio_initialized:
             try:
                 # Check current settings to see if reactive mode is still enabled
-                current_settings = get_current_settings()
+                current_settings = check_and_log_settings_changes()
                 if not current_settings.reactive:
                     time.sleep(0.1)  # Sleep longer when not in reactive mode
                     continue
@@ -297,7 +336,9 @@ def play_realtime(imgs, args):
     def frame_generator():
         """Generate frames in a separate thread for better performance."""
         try:
-            if args.reactive:
+            # Check settings and log changes if any
+            current_settings = check_and_log_settings_changes()
+            if current_settings.reactive:
                 # Reactive mode: generate frames on demand based on audio intensity
                 reactive_frame_generator()
             else:
@@ -310,7 +351,7 @@ def play_realtime(imgs, args):
     def standard_frame_generator():
         """Standard time-based frame generation."""
         # Get current settings (may be updated from web GUI)
-        current_settings = get_current_settings()
+        current_settings = check_and_log_settings_changes()
 
         # Initial hold frames
         init_hold = int(round(current_settings.hold * current_settings.fps))
@@ -323,7 +364,7 @@ def play_realtime(imgs, args):
         # Process transitions
         for i in range(len(imgs) - 1):
             # Get fresh settings for each transition to allow real-time updates
-            current_settings = get_current_settings()
+            current_settings = check_and_log_settings_changes()
 
             logging.info(f"Processing transition {i + 1}/{len(imgs) - 1}")
             a, b = imgs[i], imgs[i + 1]
@@ -350,7 +391,7 @@ def play_realtime(imgs, args):
                 frame_buffer.put(frame_bgr)
 
             # Hold frames with current settings
-            current_settings = get_current_settings()  # Refresh again for hold duration
+            current_settings = check_and_log_settings_changes()  # Refresh again for hold duration
             updated_hold = int(round(current_settings.hold * current_settings.fps))
             for _ in range(updated_hold // 4):
                 frame_bgr = cv2.cvtColor(b, cv2.COLOR_RGB2BGR)
@@ -379,13 +420,13 @@ def play_realtime(imgs, args):
         frame_buffer.put(current_frame_bgr)
 
         # Get initial settings
-        current_settings = get_current_settings()
+        current_settings = check_and_log_settings_changes()
         logging.info(f"Simple reactive mode started. Audio threshold: {current_settings.audio_threshold}")
 
         while True:
             try:
                 # Get current settings for this iteration (allows real-time updates)
-                current_settings = get_current_settings()
+                current_settings = check_and_log_settings_changes()
 
                 # Get current audio intensity (loudness)
                 with audio_features_lock:
@@ -503,7 +544,7 @@ def play_realtime(imgs, args):
 
     # Start audio monitoring thread for reactive mode
     audio_monitor_thread = None
-    current_settings = get_current_settings()
+    current_settings = check_and_log_settings_changes()
     if current_settings.reactive and audio_initialized:
         audio_monitor_thread = threading.Thread(target=audio_monitor, daemon=True)
         audio_monitor_thread.start()
@@ -530,7 +571,7 @@ def play_realtime(imgs, args):
         while True:
             if not paused:
                 # Get current settings for dynamic frame timing
-                current_settings = get_current_settings()
+                current_settings = check_and_log_settings_changes()
                 current_frame_time = 1.0 / current_settings.fps
 
                 # Get next frame from buffer
