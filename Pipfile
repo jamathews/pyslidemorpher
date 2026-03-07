@@ -5,7 +5,12 @@ name = "pypi"
 
 [packages]
 opencv-python = "*"
+numpy = "*"
 imageio = {extras = ["ffmpeg"], version = "*"}
+torch = "*"
+torchvision = "*"
+pygame = "*"
+flask = "*"
 
 [dev-packages]
 
