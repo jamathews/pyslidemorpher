@@ -325,7 +325,7 @@
                 const element = document.getElementById(id);
                 if (element) {
                     element.addEventListener('input', function() {
-                        updateSetting(id.replace('-', '_'), this.value);
+                        updateSetting(id.replaceAll('-', '_'), this.value);
                         updateValueDisplay(id, this.value);
                     });
                 }
