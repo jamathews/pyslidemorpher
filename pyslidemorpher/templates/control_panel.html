@@ -246,21 +246,6 @@
                 </div>
             </div>
 
-            <!-- Audio Settings -->
-            <div class="control-group">
-                <h3>🔊 Audio</h3>
-                <div class="control-item">
-                    <div class="checkbox-container">
-                        <input type="checkbox" id="reactive">
-                        <label for="reactive">Reactive Mode</label>
-                    </div>
-                </div>
-                <div class="control-item">
-                    <label for="audio-threshold">Audio Threshold</label>
-                    <input type="range" id="audio-threshold" min="0" max="1" step="0.01" value="0.1">
-                    <span class="value-display" id="audio-threshold-value">0.10</span>
-                </div>
-            </div>
         </div>
 
         <div class="command-buttons">
@@ -319,7 +304,7 @@
         function setupEventListeners() {
             // Range inputs and selects
             const controls = ['fps', 'pixel-size', 'seconds-per-transition', 'hold', 
-                            'transition', 'easing', 'audio-threshold'];
+                            'transition', 'easing'];
 
             controls.forEach(id => {
                 const element = document.getElementById(id);
@@ -331,10 +316,6 @@
                 }
             });
 
-            // Checkbox
-            document.getElementById('reactive').addEventListener('change', function() {
-                updateSetting('reactive', this.checked);
-            });
         }
 
         // Update value display for range inputs
@@ -344,8 +325,6 @@
                 let displayValue = value;
                 if (id === 'seconds-per-transition' || id === 'hold') {
                     displayValue = parseFloat(value).toFixed(1) + 's';
-                } else if (id === 'audio-threshold') {
-                    displayValue = parseFloat(value).toFixed(2);
                 }
                 display.textContent = displayValue;
             }

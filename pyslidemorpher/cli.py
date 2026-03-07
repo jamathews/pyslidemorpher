@@ -49,10 +49,6 @@ def main():
                     help="Audio file to include in the output video")
     ap.add_argument("--realtime", action="store_true",
                     help="Play slideshow in realtime instead of writing to file")
-    ap.add_argument("--reactive", action="store_true",
-                    help="Use audio intensity to trigger transitions instead of time (requires --audio and --realtime)")
-    ap.add_argument("--audio-threshold", type=float, default=0.1,
-                    help="Audio intensity threshold for triggering transitions in reactive mode (0.0-1.0)")
     ap.add_argument("--use-pytorch", action="store_true",
                     help="Enable PyTorch GPU acceleration (requires PyTorch installation)")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -61,19 +57,6 @@ def main():
                     help="Enable web-based GUI for realtime control (requires --realtime and Flask)")
     args = ap.parse_args()
 
-    # Validate reactive mode requirements
-    if args.reactive:
-        if not args.realtime:
-            print("Error: --reactive can only be used with --realtime mode")
-            raise SystemExit(1)
-        if not args.audio:
-            print("Error: --reactive requires --audio to be specified")
-            raise SystemExit(1)
-
-    # Validate audio threshold range
-    if args.audio_threshold < 0.0 or args.audio_threshold > 1.0:
-        print("Error: --audio-threshold must be between 0.0 and 1.0")
-        raise SystemExit(1)
 
     # Validate web GUI requirements
     if args.web_gui:

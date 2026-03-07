@@ -28,8 +28,6 @@ class RealtimeController:
             'pixel_size': 4,
             'transition': 'default',
             'easing': 'smoothstep',
-            'audio_threshold': 0.1,
-            'reactive': False,
             'paused': False
         }
         self.settings_lock = threading.Lock()
@@ -47,11 +45,11 @@ class RealtimeController:
                 # Type conversion based on expected types
                 if key == 'fps':
                     value = int(value)
-                elif key in ['seconds_per_transition', 'hold', 'audio_threshold']:
+                elif key in ['seconds_per_transition', 'hold']:
                     value = float(value)
                 elif key == 'pixel_size':
                     value = int(value)
-                elif key in ['reactive', 'paused']:
+                elif key in ['paused']:
                     value = bool(value)
 
                 self.settings[key] = value
