@@ -19,10 +19,15 @@ PySlidemorpher is a pixel-morph slideshow generator that treats image pixels as 
 - **Hue-Sorted**: Hue-based color sorting transitions
 - **Random**: Randomly selects different transitions for each image pair
 
-### 🎵 Audio Integration
+### 🎵 Enhanced Audio Integration
 - **Audio Synchronization**: Add background music to generated videos
-- **Audio-Reactive Mode**: Transitions triggered by audio intensity in real-time
-- **Configurable Thresholds**: Adjust sensitivity for audio-reactive transitions
+- **Advanced Audio-Reactive Mode**: Intelligent transitions triggered by multiple audio characteristics
+  - **Multiple Trigger Types**: Intensity, beat detection, and peak detection
+  - **Frequency Domain Analysis**: Low, mid, and high frequency band analysis
+  - **Dynamic Thresholds**: Adaptive sensitivity based on audio history
+  - **Audio-Responsive Parameters**: Transition speed, detail level, and easing adapt to audio
+- **Real-time Audio Analysis**: 10ms update rate with spectral analysis and onset detection
+- **Subtle Audio Effects**: Brightness modulation synchronized with audio intensity
 
 ### ⚡ Performance Options
 - **CPU Rendering**: NumPy-based rendering for broad compatibility
