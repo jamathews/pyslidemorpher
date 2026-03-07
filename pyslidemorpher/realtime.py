@@ -16,6 +16,17 @@ from queue import Queue
 import cv2
 import numpy as np
 
+# Try to import scipy for advanced FFT operations, fallback to numpy
+try:
+    from scipy import signal
+    from scipy.fft import fft, fftfreq
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    # Use numpy's FFT as fallback
+    from numpy.fft import fft, fftfreq
+    logging.warning("scipy not available - using numpy FFT for audio visualizations")
+
 environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 
 try:
@@ -83,6 +94,316 @@ def get_random_transition_function():
     return selected
 
 
+def render_audio_visualizations(frame, audio_data, audio_features, settings, sample_rate=22050):
+    """Render audio visualizations on the frame based on current settings."""
+    if audio_data is None or len(audio_data) == 0:
+        return frame
+
+    height, width = frame.shape[:2]
+    viz_size = settings.get('viz_size', 0.3)
+    viz_opacity = settings.get('viz_opacity', 0.7)
+
+    # Calculate visualization dimensions
+    viz_width = int(width * viz_size)
+    viz_height = int(height * viz_size)
+
+    # Position calculations for different visualizations
+    positions = {
+        'top_left': (20, 20),
+        'top_right': (width - viz_width - 20, 20),
+        'bottom_left': (20, height - viz_height - 20),
+        'bottom_right': (width - viz_width - 20, height - viz_height - 20),
+        'center': (width // 2 - viz_width // 2, height // 2 - viz_height // 2)
+    }
+
+    viz_count = 0
+    position_keys = list(positions.keys())
+
+    # Convert stereo to mono if needed
+    if len(audio_data.shape) > 1:
+        mono_data = np.mean(audio_data, axis=1)
+    else:
+        mono_data = audio_data
+
+    # Get recent audio data for visualizations (last 2048 samples)
+    recent_samples = min(2048, len(mono_data))
+    recent_data = mono_data[-recent_samples:].astype(np.float32)
+
+    # Normalize audio data
+    if np.max(np.abs(recent_data)) > 0:
+        recent_data = recent_data / np.max(np.abs(recent_data))
+
+    # Oscilloscope visualization
+    if settings.get('viz_oscilloscope', False) and viz_count < len(position_keys):
+        pos = positions[position_keys[viz_count]]
+        render_oscilloscope(frame, recent_data, pos, viz_width, viz_height, viz_opacity)
+        viz_count += 1
+
+    # Waveform visualization
+    if settings.get('viz_waveform', False) and viz_count < len(position_keys):
+        pos = positions[position_keys[viz_count]]
+        render_waveform(frame, recent_data, pos, viz_width, viz_height, viz_opacity)
+        viz_count += 1
+
+    # Spectrum visualization
+    if settings.get('viz_spectrum', False) and viz_count < len(position_keys):
+        pos = positions[position_keys[viz_count]]
+        render_spectrum(frame, recent_data, pos, viz_width, viz_height, viz_opacity, sample_rate)
+        viz_count += 1
+
+    # EQ visualization
+    if settings.get('viz_eq', False) and viz_count < len(position_keys):
+        pos = positions[position_keys[viz_count]]
+        render_eq(frame, recent_data, pos, viz_width, viz_height, viz_opacity, sample_rate)
+        viz_count += 1
+
+    # Lissajous visualization (requires stereo data)
+    if settings.get('viz_lissajous', False) and viz_count < len(position_keys):
+        pos = positions[position_keys[viz_count]]
+        if len(audio_data.shape) > 1:
+            render_lissajous(frame, audio_data[-recent_samples:], pos, viz_width, viz_height, viz_opacity)
+        else:
+            # Create pseudo-stereo for mono data
+            delayed_data = np.roll(recent_data, recent_samples // 4)
+            stereo_data = np.column_stack([recent_data, delayed_data])
+            render_lissajous(frame, stereo_data, pos, viz_width, viz_height, viz_opacity)
+        viz_count += 1
+
+    return frame
+
+
+def render_oscilloscope(frame, audio_data, pos, width, height, opacity):
+    """Render oscilloscope visualization."""
+    x, y = pos
+
+    # Create overlay
+    overlay = frame.copy()
+
+    # Draw background
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 0, 0), -1)
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (100, 100, 100), 2)
+
+    # Draw center line
+    center_y = y + height // 2
+    cv2.line(overlay, (x, center_y), (x + width, center_y), (50, 50, 50), 1)
+
+    # Draw waveform
+    if len(audio_data) > 1:
+        points = []
+        for i in range(min(width, len(audio_data))):
+            sample_idx = int(i * len(audio_data) / width)
+            sample_y = int(center_y + audio_data[sample_idx] * height * 0.4)
+            sample_y = max(y, min(y + height, sample_y))
+            points.append((x + i, sample_y))
+
+        if len(points) > 1:
+            for i in range(len(points) - 1):
+                cv2.line(overlay, points[i], points[i + 1], (0, 255, 0), 2)
+
+    # Blend with original frame
+    cv2.addWeighted(frame, 1 - opacity, overlay, opacity, 0, frame)
+
+
+def render_waveform(frame, audio_data, pos, width, height, opacity):
+    """Render waveform visualization."""
+    x, y = pos
+
+    # Create overlay
+    overlay = frame.copy()
+
+    # Draw background
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 0, 0), -1)
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (100, 100, 100), 2)
+
+    # Draw waveform as bars
+    if len(audio_data) > 0:
+        bar_width = max(1, width // 64)  # 64 bars
+        for i in range(0, width, bar_width):
+            sample_idx = int(i * len(audio_data) / width)
+            if sample_idx < len(audio_data):
+                amplitude = abs(audio_data[sample_idx])
+                bar_height = int(amplitude * height * 0.8)
+                bar_y = y + height - bar_height
+
+                # Color based on amplitude
+                color = (0, int(255 * amplitude), int(255 * (1 - amplitude)))
+                cv2.rectangle(overlay, (x + i, bar_y), (x + i + bar_width - 1, y + height), color, -1)
+
+    # Blend with original frame
+    cv2.addWeighted(frame, 1 - opacity, overlay, opacity, 0, frame)
+
+
+def render_spectrum(frame, audio_data, pos, width, height, opacity, sample_rate):
+    """Render spectrum analyzer visualization."""
+    x, y = pos
+
+    # Create overlay
+    overlay = frame.copy()
+
+    # Draw background
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 0, 0), -1)
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (100, 100, 100), 2)
+
+    if len(audio_data) > 0:
+        # Apply window function to reduce spectral leakage
+        if SCIPY_AVAILABLE:
+            windowed_data = audio_data * np.hanning(len(audio_data))
+        else:
+            # Use numpy's hanning window as fallback
+            windowed_data = audio_data * np.hanning(len(audio_data))
+
+        # Compute FFT
+        fft_data = np.abs(fft(windowed_data))
+        freqs = fftfreq(len(windowed_data), 1/sample_rate)
+
+        # Take only positive frequencies
+        positive_freqs = freqs[:len(freqs)//2]
+        positive_fft = fft_data[:len(fft_data)//2]
+
+        # Focus on audible range (20Hz to 20kHz)
+        audible_mask = (positive_freqs >= 20) & (positive_freqs <= 20000)
+        audible_freqs = positive_freqs[audible_mask]
+        audible_fft = positive_fft[audible_mask]
+
+        if len(audible_fft) > 0:
+            # Logarithmic frequency scaling
+            log_freqs = np.log10(audible_freqs + 1)
+
+            # Draw spectrum bars
+            bar_width = max(1, width // 64)
+            for i in range(0, width, bar_width):
+                freq_idx = int(i * len(audible_fft) / width)
+                if freq_idx < len(audible_fft):
+                    magnitude = audible_fft[freq_idx]
+                    # Logarithmic magnitude scaling
+                    log_magnitude = np.log10(magnitude + 1) / 6  # Normalize
+                    bar_height = int(log_magnitude * height * 0.8)
+                    bar_y = y + height - bar_height
+
+                    # Color based on frequency (blue for low, red for high)
+                    freq_ratio = i / width
+                    color = (int(255 * freq_ratio), int(255 * (1 - freq_ratio)), 255)
+                    cv2.rectangle(overlay, (x + i, bar_y), (x + i + bar_width - 1, y + height), color, -1)
+
+    # Blend with original frame
+    cv2.addWeighted(frame, 1 - opacity, overlay, opacity, 0, frame)
+
+
+def render_eq(frame, audio_data, pos, width, height, opacity, sample_rate):
+    """Render equalizer-style visualization with frequency bands."""
+    x, y = pos
+
+    # Create overlay
+    overlay = frame.copy()
+
+    # Draw background
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 0, 0), -1)
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (100, 100, 100), 2)
+
+    if len(audio_data) > 0:
+        # Define frequency bands (similar to graphic equalizer)
+        bands = [60, 170, 310, 600, 1000, 3000, 6000, 12000, 14000, 16000]  # Hz
+
+        # Compute FFT
+        windowed_data = audio_data * np.hanning(len(audio_data))
+        fft_data = np.abs(fft(windowed_data))
+        freqs = fftfreq(len(windowed_data), 1/sample_rate)
+
+        # Take only positive frequencies
+        positive_freqs = freqs[:len(freqs)//2]
+        positive_fft = fft_data[:len(fft_data)//2]
+
+        # Calculate energy in each band
+        band_energies = []
+        for i in range(len(bands) - 1):
+            low_freq = bands[i]
+            high_freq = bands[i + 1]
+
+            # Find frequency indices
+            low_idx = np.argmin(np.abs(positive_freqs - low_freq))
+            high_idx = np.argmin(np.abs(positive_freqs - high_freq))
+
+            # Calculate average energy in this band
+            if high_idx > low_idx:
+                band_energy = np.mean(positive_fft[low_idx:high_idx])
+                band_energies.append(band_energy)
+            else:
+                band_energies.append(0)
+
+        # Draw EQ bars
+        if band_energies:
+            bar_width = width // len(band_energies)
+            max_energy = max(band_energies) if max(band_energies) > 0 else 1
+
+            for i, energy in enumerate(band_energies):
+                normalized_energy = energy / max_energy
+                bar_height = int(normalized_energy * height * 0.8)
+                bar_x = x + i * bar_width
+                bar_y = y + height - bar_height
+
+                # Color gradient from green (low) to red (high)
+                color = (0, int(255 * (1 - normalized_energy)), int(255 * normalized_energy))
+                cv2.rectangle(overlay, (bar_x + 2, bar_y), (bar_x + bar_width - 2, y + height), color, -1)
+
+                # Draw frequency label
+                freq_label = f"{bands[i]}"
+                cv2.putText(overlay, freq_label, (bar_x + 2, y + height - 5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+
+    # Blend with original frame
+    cv2.addWeighted(frame, 1 - opacity, overlay, opacity, 0, frame)
+
+
+def render_lissajous(frame, stereo_data, pos, width, height, opacity):
+    """Render Lissajous curve visualization."""
+    x, y = pos
+
+    # Create overlay
+    overlay = frame.copy()
+
+    # Draw background
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 0, 0), -1)
+    cv2.rectangle(overlay, (x, y), (x + width, y + height), (100, 100, 100), 2)
+
+    # Draw center lines
+    center_x = x + width // 2
+    center_y = y + height // 2
+    cv2.line(overlay, (center_x, y), (center_x, y + height), (50, 50, 50), 1)
+    cv2.line(overlay, (x, center_y), (x + width, center_y), (50, 50, 50), 1)
+
+    if len(stereo_data) > 1 and stereo_data.shape[1] >= 2:
+        # Normalize stereo channels
+        left = stereo_data[:, 0].astype(np.float32)
+        right = stereo_data[:, 1].astype(np.float32)
+
+        if np.max(np.abs(left)) > 0:
+            left = left / np.max(np.abs(left))
+        if np.max(np.abs(right)) > 0:
+            right = right / np.max(np.abs(right))
+
+        # Create Lissajous points
+        points = []
+        step = max(1, len(left) // 500)  # Limit number of points for performance
+
+        for i in range(0, len(left), step):
+            point_x = int(center_x + left[i] * width * 0.4)
+            point_y = int(center_y + right[i] * height * 0.4)
+            point_x = max(x, min(x + width, point_x))
+            point_y = max(y, min(y + height, point_y))
+            points.append((point_x, point_y))
+
+        # Draw Lissajous curve
+        if len(points) > 1:
+            for i in range(len(points) - 1):
+                # Color fade effect
+                alpha = i / len(points)
+                color = (int(255 * alpha), int(255 * (1 - alpha)), 255)
+                cv2.line(overlay, points[i], points[i + 1], color, 2)
+
+    # Blend with original frame
+    cv2.addWeighted(frame, 1 - opacity, overlay, opacity, 0, frame)
+
+
 
 
 def play_realtime(imgs, args):
@@ -147,9 +468,9 @@ def play_realtime(imgs, args):
     def check_and_log_settings_changes():
         """Check if settings have changed and log the entire settings JSON if they have."""
         nonlocal previous_settings
-        
+
         current_settings = get_current_settings()
-        
+
         # Convert current settings to a comparable dictionary
         current_dict = {}
         if web_controller:
@@ -166,7 +487,7 @@ def play_realtime(imgs, args):
                 'audio_threshold': current_settings.audio_threshold,
                 'reactive': current_settings.reactive,
             }
-        
+
         # Compare with previous settings
         if previous_settings is None:
             # First time - just store current settings without logging
@@ -176,7 +497,7 @@ def play_realtime(imgs, args):
             settings_json = json.dumps(current_dict, indent=2)
             logging.warning(f"Settings changed:\n{settings_json}")
             previous_settings = current_dict.copy()
-        
+
         return current_settings
 
     # Log realtime mode start at WARNING level so it's always visible
@@ -587,6 +908,25 @@ def play_realtime(imgs, args):
                         generator_thread = threading.Thread(target=frame_generator, daemon=True)
                         generator_thread.start()
                         continue
+
+                    # Apply audio visualizations if any are enabled
+                    if web_controller:
+                        settings = web_controller.get_settings()
+                        # Check if any visualizations are enabled
+                        viz_enabled = any([
+                            settings.get('viz_oscilloscope', False),
+                            settings.get('viz_lissajous', False),
+                            settings.get('viz_spectrum', False),
+                            settings.get('viz_waveform', False),
+                            settings.get('viz_eq', False)
+                        ])
+
+                        if viz_enabled and audio_initialized and audio_data is not None:
+                            with audio_features_lock:
+                                current_audio_features = audio_features.copy()
+                            frame = render_audio_visualizations(
+                                frame, audio_data, current_audio_features, settings
+                            )
 
                     # Display frame
                     cv2.imshow(window_name, frame)

@@ -30,7 +30,15 @@ class RealtimeController:
             'easing': 'smoothstep',
             'audio_threshold': 0.1,
             'reactive': False,
-            'paused': False
+            'paused': False,
+            # Audio visualization settings
+            'viz_oscilloscope': False,
+            'viz_lissajous': False,
+            'viz_spectrum': False,
+            'viz_waveform': False,
+            'viz_eq': False,
+            'viz_opacity': 0.7,
+            'viz_size': 0.3
         }
         self.settings_lock = threading.Lock()
         self.command_queue = Queue()
@@ -47,11 +55,11 @@ class RealtimeController:
                 # Type conversion based on expected types
                 if key == 'fps':
                     value = int(value)
-                elif key in ['seconds_per_transition', 'hold', 'audio_threshold']:
+                elif key in ['seconds_per_transition', 'hold', 'audio_threshold', 'viz_opacity', 'viz_size']:
                     value = float(value)
                 elif key == 'pixel_size':
                     value = int(value)
-                elif key in ['reactive', 'paused']:
+                elif key in ['reactive', 'paused', 'viz_oscilloscope', 'viz_lissajous', 'viz_spectrum', 'viz_waveform', 'viz_eq']:
                     value = bool(value)
 
                 self.settings[key] = value
