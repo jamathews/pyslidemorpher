@@ -6,7 +6,9 @@ Handles live slideshow display using OpenCV.
 
 import json
 import logging
+import math
 import random
+import subprocess
 import threading
 import time
 from os import environ
@@ -98,6 +100,130 @@ def _play_audio_loop(audio_file):
         logging.error(f"Error in audio playback: {e}")
 
 
+def _build_audio_envelope(audio_file, envelope_fps):
+    """Build a normalized RMS envelope using ffmpeg-decoded PCM data."""
+    if envelope_fps <= 0:
+        return None
+
+    try:
+        cmd = [
+            "ffmpeg",
+            "-v", "error",
+            "-i", str(audio_file),
+            "-ac", "1",
+            "-ar", "44100",
+            "-f", "f32le",
+            "-"
+        ]
+        result = subprocess.run(cmd, capture_output=True, check=True)
+    except FileNotFoundError:
+        logging.warning("Reactive mode requested, but ffmpeg is not installed.")
+        return None
+    except subprocess.CalledProcessError as err:
+        stderr = err.stderr.decode("utf-8", errors="ignore").strip()
+        logging.warning(f"Could not analyze audio for reactive mode: {stderr}")
+        return None
+
+    samples = np.frombuffer(result.stdout, dtype=np.float32)
+    if samples.size == 0:
+        logging.warning("Reactive mode audio analysis produced no samples.")
+        return None
+
+    sample_rate = 44100
+    window = max(1, int(sample_rate / envelope_fps))
+    usable = (samples.size // window) * window
+    if usable == 0:
+        return None
+
+    samples = samples[:usable].reshape(-1, window)
+    rms = np.sqrt(np.mean(samples * samples, axis=1))
+
+    low = float(np.percentile(rms, 5))
+    high = float(np.percentile(rms, 98))
+    if high <= low:
+        normalized = np.clip(rms, 0.0, 1.0)
+    else:
+        normalized = np.clip((rms - low) / (high - low), 0.0, 1.0)
+
+    duration = samples.shape[0] / envelope_fps
+    return {
+        "values": normalized.astype(np.float32),
+        "fps": float(envelope_fps),
+        "duration": float(duration),
+    }
+
+
+def _current_audio_level(audio_envelope, audio_start_time):
+    """Get current normalized audio level based on elapsed looped playback time."""
+    if not audio_envelope or audio_start_time is None:
+        return 0.0
+
+    duration = audio_envelope["duration"]
+    if duration <= 0:
+        return 0.0
+
+    elapsed = (time.time() - audio_start_time) % duration
+    idx = int(elapsed * audio_envelope["fps"])
+    idx = max(0, min(idx, len(audio_envelope["values"]) - 1))
+    return float(audio_envelope["values"][idx])
+
+
+def _apply_audio_reactive_effect(frame_bgr, level, elapsed_time):
+    """Apply a dramatic audio-reactive effect stack for gallery-style playback."""
+    if level <= 0:
+        return frame_bgr
+
+    h, w = frame_bgr.shape[:2]
+    cx, cy = w // 2, h // 2
+    drive = float(np.clip(level, 0.0, 1.0)) ** 1.35
+
+    # Strong pulse zoom and rhythmic rotation to make beats physically visible.
+    zoom = 1.0 + 0.20 * drive + 0.06 * math.sin(elapsed_time * 2.4)
+    if zoom > 1.001:
+        crop_w = max(2, int(w / zoom))
+        crop_h = max(2, int(h / zoom))
+        x0 = (w - crop_w) // 2
+        y0 = (h - crop_h) // 2
+        pulsed = cv2.resize(frame_bgr[y0:y0 + crop_h, x0:x0 + crop_w], (w, h), interpolation=cv2.INTER_LINEAR)
+    else:
+        pulsed = frame_bgr
+
+    angle = (12.0 * drive) * math.sin(elapsed_time * 3.8)
+    rot = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+    pulsed = cv2.warpAffine(pulsed, rot, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+    # Chroma drift for broad spectral movement.
+    hsv = cv2.cvtColor(pulsed, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hue_shift = 35.0 * drive + 16.0 * math.sin(elapsed_time * 1.25)
+    hsv[..., 0] = (hsv[..., 0] + hue_shift) % 180.0
+    hsv[..., 1] = np.clip(hsv[..., 1] * (1.15 + 0.85 * drive), 0.0, 255.0)
+    hsv[..., 2] = np.clip(hsv[..., 2] * (1.0 + 0.22 * drive), 0.0, 255.0)
+    shifted = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+    # RGB channel split gives a kinetic prism/ghosting artifact on loud passages.
+    split_px = max(1, int(3 + (24 * drive)))
+    b, g, r = cv2.split(shifted)
+    b = np.roll(b, -split_px, axis=1)
+    r = np.roll(r, split_px, axis=0)
+    split = cv2.merge((b, g, r))
+
+    # Bloom and strobe flash for dramatic impact peaks.
+    sigma = 2.0 + (14.0 * drive)
+    flash = max(0.0, drive - 0.66) * 2.8
+    if flash > 0:
+        split = cv2.convertScaleAbs(split, alpha=1.0 + flash, beta=65.0 * flash)
+    bloom = cv2.GaussianBlur(shifted, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    out = cv2.addWeighted(split, 1.0, bloom, 0.34 + (0.7 * drive), 0.0)
+
+    # Pulsing vignette to focus energy into the center and add tunnel-like depth.
+    yy, xx = np.ogrid[:h, :w]
+    dist = np.sqrt(((xx - cx) / max(1, cx)) ** 2 + ((yy - cy) / max(1, cy)) ** 2)
+    vignette = np.clip(1.22 - (0.55 + 0.35 * drive) * dist, 0.45, 1.45)
+    out = np.clip(out.astype(np.float32) * vignette[..., None], 0, 255).astype(np.uint8)
+
+    return out
+
+
 def play_realtime(imgs, args):
     """Play slideshow in realtime using OpenCV display with optimized performance."""
     W, H = args.size
@@ -105,17 +231,34 @@ def play_realtime(imgs, args):
 
     # Initialize audio if provided
     audio_thread = None
+    audio_start_time = None
+    reactive_enabled = bool(getattr(args, "reactive", False))
+    audio_envelope = None
     if hasattr(args, 'audio') and args.audio and args.audio.exists():
+        if reactive_enabled:
+            audio_envelope = _build_audio_envelope(args.audio, envelope_fps=max(args.fps, 24))
+            if audio_envelope is None:
+                reactive_enabled = False
+                logging.warning("Reactive mode disabled: audio analysis unavailable for this file/environment.")
+            else:
+                logging.info("Reactive mode enabled: audio-driven pulse, chroma drift, and bloom are active.")
         if AUDIO_AVAILABLE:
             try:
                 pygame.mixer.init()
                 audio_thread = threading.Thread(target=_play_audio_loop, args=(args.audio,), daemon=True)
                 audio_thread.start()
+                audio_start_time = time.time()
                 logging.info(f"Started audio playback: {args.audio}")
             except Exception as e:
                 logging.error(f"Failed to initialize audio: {e}")
+                if reactive_enabled:
+                    reactive_enabled = False
+                    logging.warning("Reactive mode disabled: audio playback could not be started.")
         else:
             logging.warning("Audio file provided but pygame is not available. Install pygame for audio support.")
+            if reactive_enabled:
+                reactive_enabled = False
+                logging.warning("Reactive mode disabled: pygame is required for synced audio playback.")
     elif hasattr(args, 'audio') and args.audio and not args.audio.exists():
         logging.error(f"Audio file not found: {args.audio}")
 
@@ -340,6 +483,9 @@ def play_realtime(imgs, args):
                         continue
 
                     # Display frame
+                    if reactive_enabled:
+                        reactive_level = _current_audio_level(audio_envelope, audio_start_time)
+                        frame = _apply_audio_reactive_effect(frame, reactive_level, time.time() - start_time)
                     cv2.imshow(window_name, frame)
                     frame_count += 1
 

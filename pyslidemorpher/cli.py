@@ -49,6 +49,8 @@ def main():
                     help="Audio file to include in the output video")
     ap.add_argument("--realtime", action="store_true",
                     help="Play slideshow in realtime instead of writing to file")
+    ap.add_argument("--reactive", action="store_true",
+                    help="Enable immersive audio-reactive visuals (requires --realtime and --audio)")
     ap.add_argument("--use-pytorch", action="store_true",
                     help="Enable PyTorch GPU acceleration (requires PyTorch installation)")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -63,6 +65,13 @@ def main():
         if not args.realtime:
             print("Error: --web-gui can only be used with --realtime mode")
             raise SystemExit(1)
+
+    if args.reactive and not args.realtime:
+        print("Error: --reactive can only be used with --realtime mode")
+        raise SystemExit(1)
+    if args.reactive and not args.audio:
+        print("Error: --reactive requires --audio")
+        raise SystemExit(1)
 
     # Configure logging
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
