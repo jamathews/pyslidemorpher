@@ -244,6 +244,14 @@
                         <option value="cubic">Cubic</option>
                     </select>
                 </div>
+                <div class="control-item">
+                    <label for="reactive-style">Reactive Style</label>
+                    <select id="reactive-style">
+                        <option value="subtle">Subtle</option>
+                        <option value="dramatic">Dramatic</option>
+                        <option value="extreme">Extreme</option>
+                    </select>
+                </div>
             </div>
 
         </div>
@@ -304,7 +312,7 @@
         function setupEventListeners() {
             // Range inputs and selects
             const controls = ['fps', 'pixel-size', 'seconds-per-transition', 'hold', 
-                            'transition', 'easing'];
+                            'transition', 'easing', 'reactive-style'];
 
             controls.forEach(id => {
                 const element = document.getElementById(id);

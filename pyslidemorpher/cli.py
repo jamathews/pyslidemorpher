@@ -51,6 +51,9 @@ def main():
                     help="Play slideshow in realtime instead of writing to file")
     ap.add_argument("--reactive", action="store_true",
                     help="Enable immersive audio-reactive visuals (requires --realtime and --audio)")
+    ap.add_argument("--reactive-style", type=str, default="dramatic",
+                    choices=["subtle", "dramatic", "extreme"],
+                    help="Reactive visual style when --reactive is enabled")
     ap.add_argument("--use-pytorch", action="store_true",
                     help="Enable PyTorch GPU acceleration (requires PyTorch installation)")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],

@@ -111,6 +111,7 @@ Once the slideshow is running, open `http://localhost:5001` in your browser to a
 
 #### Audio Section (when audio is provided)
 - **Reactive Mode**: Toggle audio-reactive transitions
+- **Reactive Style**: Switch between `subtle`, `dramatic`, and `extreme` live
 - **Audio Threshold**: Sensitivity for audio triggers (0.0-1.0)
 
 #### Playback Controls

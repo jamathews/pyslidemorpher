@@ -28,6 +28,7 @@ class RealtimeController:
             'pixel_size': 4,
             'transition': 'default',
             'easing': 'smoothstep',
+            'reactive_style': 'dramatic',
             'paused': False
         }
         self.settings_lock = threading.Lock()
@@ -51,6 +52,10 @@ class RealtimeController:
                     value = int(value)
                 elif key in ['paused']:
                     value = bool(value)
+                elif key == 'reactive_style':
+                    value = str(value)
+                    if value not in ['subtle', 'dramatic', 'extreme']:
+                        value = 'dramatic'
 
                 self.settings[key] = value
                 logging.info(f"Updated setting {key} to {value}")

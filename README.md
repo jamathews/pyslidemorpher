@@ -99,7 +99,7 @@ python pyslidemorpher.py /path/to/photos \
     --realtime \
     --reactive \
     --audio music.mp3 \
-    --audio-threshold 0.15
+    --reactive-style extreme
 ```
 
 ### Web GUI Control
@@ -131,6 +131,7 @@ python pyslidemorpher.py /path/to/photos \
 | `--audio` | Audio file to include | None |
 | `--realtime` | Real-time playback mode | False |
 | `--reactive` | Audio-reactive transitions | False |
+| `--reactive-style` | Reactive visual style (`subtle`, `dramatic`, `extreme`) | dramatic |
 | `--audio-threshold` | Audio sensitivity (0.0-1.0) | 0.1 |
 | `--use-pytorch` | Enable GPU acceleration | False |
 | `--web-gui` | Enable web control interface | False |
