@@ -45,6 +45,32 @@ except ImportError:
     WEB_GUI_AVAILABLE = False
     logging.warning("Web GUI not available - Flask or web_gui module not found")
 
+REACTIVE_BANDS = ["sub", "bass", "low_mid", "high_mid", "treble", "air"]
+EFFECT_KEYS = ["pulse", "warp", "color", "glow", "strobe", "trails"]
+DEFAULT_REACTIVE_CONTROLS = {
+    "reactive_master_gain": 1.0,
+    "pulse_enabled": True,
+    "pulse_strength": 1.0,
+    "pulse_band": "bass",
+    "warp_enabled": True,
+    "warp_strength": 1.0,
+    "warp_band": "low_mid",
+    "color_enabled": True,
+    "color_strength": 1.0,
+    "color_band": "high_mid",
+    "glow_enabled": True,
+    "glow_strength": 1.0,
+    "glow_band": "treble",
+    "strobe_enabled": True,
+    "strobe_strength": 1.0,
+    "strobe_band": "bass",
+    "trails_enabled": True,
+    "trails_strength": 1.0,
+    "trails_band": "sub",
+}
+for _band in REACTIVE_BANDS:
+    DEFAULT_REACTIVE_CONTROLS[f"eq_{_band}_gain"] = 1.0
+
 
 def get_random_transition_function():
     """Randomly select a transition function from available options.
@@ -100,8 +126,17 @@ def _play_audio_loop(audio_file):
         logging.error(f"Error in audio playback: {e}")
 
 
+def _normalize_series(values):
+    """Normalize array to 0..1 with robust percentile scaling."""
+    low = float(np.percentile(values, 5))
+    high = float(np.percentile(values, 98))
+    if high <= low:
+        return np.clip(values, 0.0, 1.0)
+    return np.clip((values - low) / (high - low), 0.0, 1.0)
+
+
 def _build_audio_envelope(audio_file, envelope_fps):
-    """Build a normalized RMS envelope using ffmpeg-decoded PCM data."""
+    """Build normalized overall + per-band envelopes using ffmpeg-decoded PCM."""
     if envelope_fps <= 0:
         return None
 
@@ -137,57 +172,108 @@ def _build_audio_envelope(audio_file, envelope_fps):
 
     samples = samples[:usable].reshape(-1, window)
     rms = np.sqrt(np.mean(samples * samples, axis=1))
+    normalized = _normalize_series(rms)
 
-    low = float(np.percentile(rms, 5))
-    high = float(np.percentile(rms, 98))
-    if high <= low:
-        normalized = np.clip(rms, 0.0, 1.0)
-    else:
-        normalized = np.clip((rms - low) / (high - low), 0.0, 1.0)
+    spectrum = np.abs(np.fft.rfft(samples, axis=1))
+    freqs = np.fft.rfftfreq(window, d=1.0 / sample_rate)
+    band_ranges = {
+        "sub": (20, 80),
+        "bass": (80, 250),
+        "low_mid": (250, 1000),
+        "high_mid": (1000, 4000),
+        "treble": (4000, 12000),
+        "air": (12000, 20000),
+    }
+
+    band_envelopes = {}
+    for band_name, (f_lo, f_hi) in band_ranges.items():
+        mask = (freqs >= f_lo) & (freqs < f_hi)
+        if not np.any(mask):
+            band_energy = np.zeros((samples.shape[0],), dtype=np.float32)
+        else:
+            band_energy = np.mean(spectrum[:, mask], axis=1)
+        band_envelopes[band_name] = _normalize_series(band_energy).astype(np.float32)
 
     duration = samples.shape[0] / envelope_fps
     return {
         "values": normalized.astype(np.float32),
+        "bands": band_envelopes,
         "fps": float(envelope_fps),
         "duration": float(duration),
     }
 
 
-def _current_audio_level(audio_envelope, audio_start_time):
-    """Get current normalized audio level based on elapsed looped playback time."""
+def _current_audio_features(audio_envelope, audio_start_time):
+    """Get current normalized overall + per-band levels for looped playback time."""
     if not audio_envelope or audio_start_time is None:
-        return 0.0
+        return {"overall": 0.0, "bands": {band: 0.0 for band in REACTIVE_BANDS}}
 
     duration = audio_envelope["duration"]
     if duration <= 0:
-        return 0.0
+        return {"overall": 0.0, "bands": {band: 0.0 for band in REACTIVE_BANDS}}
 
     elapsed = (time.time() - audio_start_time) % duration
     idx = int(elapsed * audio_envelope["fps"])
     idx = max(0, min(idx, len(audio_envelope["values"]) - 1))
-    return float(audio_envelope["values"][idx])
+    bands = {}
+    for band in REACTIVE_BANDS:
+        series = audio_envelope.get("bands", {}).get(band)
+        bands[band] = float(series[idx]) if series is not None and len(series) > idx else 0.0
+    return {"overall": float(audio_envelope["values"][idx]), "bands": bands}
 
 
-def _apply_audio_reactive_effect(frame_bgr, level, elapsed_time, style="dramatic"):
-    """Apply a dramatic audio-reactive effect stack for gallery-style playback."""
-    if level <= 0:
+def _resolve_reactive_controls(current_settings):
+    """Build effective reactive controls from settings with defaults."""
+    controls = DEFAULT_REACTIVE_CONTROLS.copy()
+    if current_settings is None:
+        return controls
+    for key in list(controls.keys()):
+        if hasattr(current_settings, key):
+            controls[key] = getattr(current_settings, key)
+    return controls
+
+
+def _apply_audio_reactive_effect(frame_bgr, audio_features, elapsed_time, style="dramatic", previous_frame=None, controls=None):
+    """Apply stackable audio-reactive effects using per-band routing controls."""
+    controls = controls or DEFAULT_REACTIVE_CONTROLS
+    overall = float(audio_features.get("overall", 0.0))
+    bands = audio_features.get("bands", {})
+    if overall <= 0:
         return frame_bgr
 
     h, w = frame_bgr.shape[:2]
     cx, cy = w // 2, h // 2
-    drive = float(np.clip(level, 0.0, 1.0)) ** 1.35
+    drive = float(np.clip(overall, 0.0, 1.0)) ** 1.35
     style = style if style in {"subtle", "dramatic", "extreme"} else "dramatic"
 
     if style == "subtle":
         strength = 0.55
     elif style == "extreme":
-        strength = 1.45
+        strength = 2.2
     else:
         strength = 1.0
 
-    # Strong pulse zoom and rhythmic rotation to make beats physically visible.
-    zoom = 1.0 + (0.20 * strength) * drive + (0.06 * strength) * math.sin(elapsed_time * 2.4)
-    if zoom > 1.001:
+    master_gain = float(max(0.0, controls.get("reactive_master_gain", 1.0)))
+
+    def effect_drive(effect_key, fallback_band):
+        if not controls.get(f"{effect_key}_enabled", True):
+            return 0.0
+        band = str(controls.get(f"{effect_key}_band", fallback_band))
+        band_level = float(bands.get(band, overall))
+        eq = float(max(0.0, controls.get(f"eq_{band}_gain", 1.0)))
+        eff_gain = float(max(0.0, controls.get(f"{effect_key}_strength", 1.0)))
+        return float(np.clip((band_level * eq * eff_gain * master_gain), 0.0, 2.5))
+
+    pulse_drive = effect_drive("pulse", "bass")
+    warp_drive = effect_drive("warp", "low_mid")
+    color_drive = effect_drive("color", "high_mid")
+    glow_drive = effect_drive("glow", "treble")
+    strobe_drive = effect_drive("strobe", "bass")
+    trails_drive = effect_drive("trails", "sub")
+
+    # Strong pulse zoom and rotation.
+    zoom = 1.0 + (0.24 * strength) * pulse_drive + (0.08 * strength) * math.sin(elapsed_time * 2.8)
+    if pulse_drive > 0 and zoom > 1.001:
         crop_w = max(2, int(w / zoom))
         crop_h = max(2, int(h / zoom))
         x0 = (w - crop_w) // 2
@@ -196,38 +282,65 @@ def _apply_audio_reactive_effect(frame_bgr, level, elapsed_time, style="dramatic
     else:
         pulsed = frame_bgr
 
-    angle = (12.0 * strength * drive) * math.sin(elapsed_time * 3.8)
+    angle = (18.0 * strength * pulse_drive) * math.sin(elapsed_time * 4.5)
     rot = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
     pulsed = cv2.warpAffine(pulsed, rot, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
-    # Chroma drift for broad spectral movement.
+    # Color drift and channel split.
     hsv = cv2.cvtColor(pulsed, cv2.COLOR_BGR2HSV).astype(np.float32)
-    hue_shift = (35.0 * strength) * drive + (16.0 * strength) * math.sin(elapsed_time * 1.25)
+    hue_shift = (42.0 * strength) * color_drive + (22.0 * strength) * math.sin(elapsed_time * 1.5)
     hsv[..., 0] = (hsv[..., 0] + hue_shift) % 180.0
-    hsv[..., 1] = np.clip(hsv[..., 1] * (1.10 + (0.85 * strength) * drive), 0.0, 255.0)
-    hsv[..., 2] = np.clip(hsv[..., 2] * (1.0 + (0.22 * strength) * drive), 0.0, 255.0)
+    hsv[..., 1] = np.clip(hsv[..., 1] * (1.10 + (0.9 * strength) * color_drive), 0.0, 255.0)
+    hsv[..., 2] = np.clip(hsv[..., 2] * (1.0 + (0.32 * strength) * color_drive), 0.0, 255.0)
     shifted = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    # RGB channel split gives a kinetic prism/ghosting artifact on loud passages.
-    split_px = max(1, int(3 + (24 * strength * drive)))
+    split_px = max(1, int(2 + (32 * strength * color_drive)))
     b, g, r = cv2.split(shifted)
     b = np.roll(b, -split_px, axis=1)
     r = np.roll(r, split_px, axis=0)
-    split = cv2.merge((b, g, r))
+    out = cv2.merge((b, g, r)) if color_drive > 0 else shifted
 
-    # Bloom and strobe flash for dramatic impact peaks.
-    sigma = 2.0 + (14.0 * strength * drive)
-    flash = max(0.0, drive - (0.75 if style == "subtle" else 0.66 if style == "dramatic" else 0.52)) * (2.0 + 0.8 * strength)
+    # Glow.
+    sigma = 1.0 + (18.0 * strength * glow_drive)
+    bloom = cv2.GaussianBlur(out, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    out = cv2.addWeighted(out, 1.0, bloom, (0.15 + 0.95 * glow_drive), 0.0)
+
+    # Strobe with more punch in extreme mode.
+    strobe_threshold = 0.80 if style == "subtle" else 0.64 if style == "dramatic" else 0.40
+    flash = max(0.0, strobe_drive - strobe_threshold) * (2.2 + 1.3 * strength)
     if flash > 0:
-        split = cv2.convertScaleAbs(split, alpha=1.0 + flash, beta=65.0 * flash)
-    bloom = cv2.GaussianBlur(shifted, (0, 0), sigmaX=sigma, sigmaY=sigma)
-    out = cv2.addWeighted(split, 1.0, bloom, 0.22 + ((0.70 * strength) * drive), 0.0)
+        out = cv2.convertScaleAbs(out, alpha=1.0 + flash, beta=85.0 * flash)
 
     # Pulsing vignette to focus energy into the center and add tunnel-like depth.
     yy, xx = np.ogrid[:h, :w]
     dist = np.sqrt(((xx - cx) / max(1, cx)) ** 2 + ((yy - cy) / max(1, cy)) ** 2)
-    vignette = np.clip(1.22 - (0.55 + (0.35 * strength) * drive) * dist, 0.45, 1.45)
+    vignette = np.clip(1.22 - (0.45 + (0.45 * strength) * max(pulse_drive, warp_drive)) * dist, 0.35, 1.65)
     out = np.clip(out.astype(np.float32) * vignette[..., None], 0, 255).astype(np.uint8)
+
+    # Radial warp.
+    amp = (0.010 + 0.065 * strength) * warp_drive
+    if amp > 0.0005:
+        y, x = np.indices((h, w), dtype=np.float32)
+        dx = x - cx
+        dy = y - cy
+        radius = np.sqrt(dx * dx + dy * dy) + 1e-6
+        wave = np.sin((radius / max(1.0, min(w, h) * 0.12)) - (elapsed_time * 10.0))
+        displacement = amp * min(w, h) * wave
+        map_x = (x + (dx / radius) * displacement).astype(np.float32)
+        map_y = (y + (dy / radius) * displacement).astype(np.float32)
+        out = cv2.remap(out, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+
+    # Neon edges piggyback on glow drive.
+    if glow_drive > 0:
+        gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 70, 160)
+        edge_color = cv2.applyColorMap(edges, cv2.COLORMAP_TURBO)
+        out = cv2.addWeighted(out, 1.0, edge_color, 0.06 + (0.52 * glow_drive * strength), 0.0)
+
+    # Temporal trails.
+    if trails_drive > 0 and previous_frame is not None and previous_frame.shape == out.shape:
+        trail_mix = np.clip(0.08 + 0.46 * trails_drive * strength, 0.0, 0.7)
+        out = cv2.addWeighted(out, 1.0 - trail_mix, previous_frame, trail_mix, 0.0)
 
     return out
 
@@ -249,7 +362,7 @@ def play_realtime(imgs, args):
                 reactive_enabled = False
                 logging.warning("Reactive mode disabled: audio analysis unavailable for this file/environment.")
             else:
-                logging.info("Reactive mode enabled: audio-driven pulse, chroma drift, and bloom are active.")
+                logging.info("Reactive mode enabled: stackable pulse/warp/color/glow/strobe/trails are active.")
         if AUDIO_AVAILABLE:
             try:
                 pygame.mixer.init()
@@ -284,6 +397,8 @@ def play_realtime(imgs, args):
             web_controller.update_setting('transition', args.transition)
             web_controller.update_setting('easing', args.easing)
             web_controller.update_setting('reactive_style', getattr(args, 'reactive_style', 'dramatic'))
+            for key, value in DEFAULT_REACTIVE_CONTROLS.items():
+                web_controller.update_setting(key, getattr(args, key, value))
 
             # Start web server
             web_server_thread = start_web_server()
@@ -311,14 +426,9 @@ def play_realtime(imgs, args):
                     # Copy all original args first
                     for key, value in vars(original_args).items():
                         setattr(self, key, value)
-                    # Override with web controller settings
-                    self.fps = settings_dict['fps']
-                    self.seconds_per_transition = settings_dict['seconds_per_transition']
-                    self.hold = settings_dict['hold']
-                    self.pixel_size = settings_dict['pixel_size']
-                    self.transition = settings_dict['transition']
-                    self.easing = settings_dict['easing']
-                    self.reactive_style = settings_dict.get('reactive_style', 'dramatic')
+                    # Override with web controller settings (all keys for dynamic controls).
+                    for key, value in settings_dict.items():
+                        setattr(self, key, value)
             return SettingsNamespace(settings, args)
         return args
 
@@ -342,6 +452,7 @@ def play_realtime(imgs, args):
                 'transition': current_settings.transition,
                 'easing': current_settings.easing,
                 'reactive_style': getattr(current_settings, 'reactive_style', 'dramatic'),
+                'reactive_master_gain': getattr(current_settings, 'reactive_master_gain', 1.0),
             }
 
         # Compare with previous settings
@@ -474,6 +585,7 @@ def play_realtime(imgs, args):
     stop_requested = False
     start_time = time.time()
     frame_count = 0
+    previous_reactive_frame = None
 
 
     try:
@@ -491,17 +603,22 @@ def play_realtime(imgs, args):
                         # Restart by creating new generator thread
                         generator_thread = threading.Thread(target=frame_generator, daemon=True)
                         generator_thread.start()
+                        previous_reactive_frame = None
                         continue
 
                     # Display frame
                     if reactive_enabled:
-                        reactive_level = _current_audio_level(audio_envelope, audio_start_time)
+                        reactive_features = _current_audio_features(audio_envelope, audio_start_time)
+                        reactive_controls = _resolve_reactive_controls(current_settings)
                         frame = _apply_audio_reactive_effect(
                             frame,
-                            reactive_level,
+                            reactive_features,
                             time.time() - start_time,
                             style=getattr(current_settings, "reactive_style", "dramatic"),
+                            previous_frame=previous_reactive_frame,
+                            controls=reactive_controls,
                         )
+                        previous_reactive_frame = frame.copy()
                     cv2.imshow(window_name, frame)
                     frame_count += 1
 
@@ -547,6 +664,7 @@ def play_realtime(imgs, args):
                 start_time = time.time()
                 frame_count = 0
                 paused = False
+                previous_reactive_frame = None
 
             # Handle web GUI commands and setting updates
             if web_controller:
@@ -574,6 +692,7 @@ def play_realtime(imgs, args):
                             start_time = time.time()
                             frame_count = 0
                             paused = False
+                            previous_reactive_frame = None
                         elif command == 'next':
                             # Skip to next image by clearing buffer
                             while not frame_buffer.empty():
@@ -620,6 +739,12 @@ def play_realtime(imgs, args):
                 if getattr(args, 'reactive_style', 'dramatic') != current_settings.get('reactive_style', 'dramatic'):
                     args.reactive_style = current_settings.get('reactive_style', 'dramatic')
                     settings_changed = True
+
+                for key, default_value in DEFAULT_REACTIVE_CONTROLS.items():
+                    current_value = current_settings.get(key, default_value)
+                    if getattr(args, key, default_value) != current_value:
+                        setattr(args, key, current_value)
+                        settings_changed = True
 
 
                 # Update paused state from web interface

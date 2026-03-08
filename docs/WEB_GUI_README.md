@@ -112,6 +112,8 @@ Once the slideshow is running, open `http://localhost:5001` in your browser to a
 #### Audio Section (when audio is provided)
 - **Reactive Mode**: Toggle audio-reactive transitions
 - **Reactive Style**: Switch between `subtle`, `dramatic`, and `extreme` live
+- **Reactive Mixer**: Enable/disable and tune stacked effects (pulse, warp, color, glow, strobe, trails)
+- **Reactive EQ**: Route each effect to an audio band and boost/cut sub, bass, mids, treble, and air
 - **Audio Threshold**: Sensitivity for audio triggers (0.0-1.0)
 
 #### Playback Controls

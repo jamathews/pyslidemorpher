@@ -29,6 +29,31 @@ class RealtimeController:
             'transition': 'default',
             'easing': 'smoothstep',
             'reactive_style': 'dramatic',
+            'reactive_master_gain': 1.0,
+            'pulse_enabled': True,
+            'pulse_strength': 1.0,
+            'pulse_band': 'bass',
+            'warp_enabled': True,
+            'warp_strength': 1.0,
+            'warp_band': 'low_mid',
+            'color_enabled': True,
+            'color_strength': 1.0,
+            'color_band': 'high_mid',
+            'glow_enabled': True,
+            'glow_strength': 1.0,
+            'glow_band': 'treble',
+            'strobe_enabled': True,
+            'strobe_strength': 1.0,
+            'strobe_band': 'bass',
+            'trails_enabled': True,
+            'trails_strength': 1.0,
+            'trails_band': 'sub',
+            'eq_sub_gain': 1.0,
+            'eq_bass_gain': 1.0,
+            'eq_low_mid_gain': 1.0,
+            'eq_high_mid_gain': 1.0,
+            'eq_treble_gain': 1.0,
+            'eq_air_gain': 1.0,
             'paused': False
         }
         self.settings_lock = threading.Lock()
@@ -56,6 +81,19 @@ class RealtimeController:
                     value = str(value)
                     if value not in ['subtle', 'dramatic', 'extreme']:
                         value = 'dramatic'
+                elif key.endswith('_enabled'):
+                    if isinstance(value, bool):
+                        pass
+                    elif isinstance(value, str):
+                        value = value.lower() in ['1', 'true', 'on', 'yes']
+                    else:
+                        value = bool(value)
+                elif key.endswith('_strength') or key.startswith('eq_') or key == 'reactive_master_gain':
+                    value = float(value)
+                elif key.endswith('_band'):
+                    value = str(value)
+                    if value not in ['sub', 'bass', 'low_mid', 'high_mid', 'treble', 'air']:
+                        value = 'bass'
 
                 self.settings[key] = value
                 logging.info(f"Updated setting {key} to {value}")
