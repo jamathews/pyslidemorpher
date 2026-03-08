@@ -13,7 +13,8 @@ from pathlib import Path
 import cv2
 import imageio
 
-from .config import USE_PYTORCH, PYTORCH_AVAILABLE, DEVICE
+from . import config
+from .config import PYTORCH_AVAILABLE, DEVICE
 from .utils import parse_size, list_images, fit_letterbox
 from .realtime import play_realtime, get_random_transition_function
 from .transitions import (
@@ -146,13 +147,12 @@ def main():
         logging.debug(f"Using provided random seed: {args.seed}")
 
     # Set PyTorch usage based on command-line argument
-    global USE_PYTORCH
-    USE_PYTORCH = args.use_pytorch
-    if USE_PYTORCH and PYTORCH_AVAILABLE:
+    config.USE_PYTORCH = args.use_pytorch
+    if config.USE_PYTORCH and PYTORCH_AVAILABLE:
         logging.info(f"PyTorch acceleration enabled (using {DEVICE})")
-    elif USE_PYTORCH and not PYTORCH_AVAILABLE:
+    elif config.USE_PYTORCH and not PYTORCH_AVAILABLE:
         logging.warning("PyTorch acceleration requested but PyTorch is not available")
-        USE_PYTORCH = False
+        config.USE_PYTORCH = False
 
     # Construct default filename if --out is not specified and not in realtime mode
     if not args.realtime and args.out is None:
