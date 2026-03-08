@@ -153,6 +153,12 @@ PIPENV_VENV_IN_PROJECT=1 pipenv run test
 PIPENV_VENV_IN_PROJECT=1 pipenv run test-cov
 ```
 
+PyCharm:
+1. Select run configuration `Tests (Pipenv)`.
+2. Run it once.
+3. In the Run tool window, click `Rerun Automatically` (circular arrows icon).
+4. Keep that run window open while coding; tests rerun on file changes.
+
 ## Technical Details
 
 ### Supported Image Formats
