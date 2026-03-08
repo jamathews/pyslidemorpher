@@ -98,9 +98,12 @@ python pyslidemorpher.py /path/to/photos --realtime
 python pyslidemorpher.py /path/to/photos \
     --realtime \
     --reactive \
-    --audio music.mp3 \
+    --audio "default" \
     --reactive-style extreme
 ```
+
+`--audio` accepts either a file path or, in realtime mode, an input device selector (for example `default`, `index:2`, or a device name). You can also use `--audio-device`.
+You can also start with no audio arguments and enable reactive mode + pick a device from the web GUI.
 
 ### Web GUI Control
 ```bash
@@ -129,6 +132,7 @@ python pyslidemorpher.py /path/to/photos \
 | `--transition` | Transition type | default |
 | `--easing` | Animation easing function | smoothstep |
 | `--audio` | Audio file to include | None |
+| `--audio-device` | Realtime input device for reactive analysis | None |
 | `--realtime` | Real-time playback mode | False |
 | `--reactive` | Audio-reactive transitions | False |
 | `--reactive-style` | Reactive visual style (`subtle`, `dramatic`, `extreme`) | dramatic |

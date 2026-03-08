@@ -7,6 +7,7 @@ Handles live slideshow display using OpenCV.
 import json
 import logging
 import math
+import platform
 import random
 import subprocess
 import threading
@@ -25,6 +26,12 @@ try:
     AUDIO_AVAILABLE = True
 except ImportError:
     AUDIO_AVAILABLE = False
+
+try:
+    import sounddevice as sd
+    SOUNDDEVICE_AVAILABLE = True
+except ImportError:
+    SOUNDDEVICE_AVAILABLE = False
 
 
 from .transitions import (
@@ -203,6 +210,168 @@ def _build_audio_envelope(audio_file, envelope_fps):
     }
 
 
+def _parse_audio_device_spec(audio_device):
+    """Parse audio device selector into sounddevice-compatible spec."""
+    if not audio_device:
+        return None
+    device = str(audio_device).strip()
+    if device in {"__default__", "default"}:
+        return None
+    if device.startswith("index:"):
+        try:
+            return int(device.split(":", 1)[1])
+        except Exception:
+            return None
+    return device
+
+
+class LiveAudioAnalyzer:
+    """Capture live input audio and expose normalized overall + band features."""
+
+    def __init__(self, device, envelope_fps=30, sample_rate=44100):
+        self.device = _parse_audio_device_spec(device)
+        self.sample_rate = int(sample_rate)
+        self.envelope_fps = max(1, int(envelope_fps))
+        self.block_size = max(256, int(self.sample_rate / self.envelope_fps))
+        self.stream = None
+        self._lock = threading.Lock()
+        self._overall = 0.0
+        self._bands = {band: 0.0 for band in REACTIVE_BANDS}
+
+    def _callback(self, indata, frames, time_info, status):
+        if status:
+            pass
+        if indata is None or len(indata) == 0:
+            return
+        mono = np.asarray(indata[:, 0], dtype=np.float32)
+        self._update_features(mono)
+
+    def _update_features(self, mono):
+        if mono.size <= 0:
+            return
+        rms = float(np.sqrt(np.mean(mono * mono)))
+        rms_norm = float(np.clip(rms * 6.5, 0.0, 1.0))
+
+        spec = np.abs(np.fft.rfft(mono))
+        freqs = np.fft.rfftfreq(mono.size, d=1.0 / self.sample_rate)
+        band_ranges = {
+            "sub": (20, 80),
+            "bass": (80, 250),
+            "low_mid": (250, 1000),
+            "high_mid": (1000, 4000),
+            "treble": (4000, 12000),
+            "air": (12000, 20000),
+        }
+        bands = {}
+        for band_name, (f_lo, f_hi) in band_ranges.items():
+            mask = (freqs >= f_lo) & (freqs < f_hi)
+            if not np.any(mask):
+                val = 0.0
+            else:
+                val = float(np.mean(spec[mask]))
+            bands[band_name] = float(np.clip(val * 0.09, 0.0, 1.0))
+
+        with self._lock:
+            alpha = 0.25
+            self._overall = ((1.0 - alpha) * self._overall) + (alpha * rms_norm)
+            for band_name in REACTIVE_BANDS:
+                self._bands[band_name] = ((1.0 - alpha) * self._bands[band_name]) + (alpha * bands[band_name])
+
+    def start(self):
+        if not SOUNDDEVICE_AVAILABLE:
+            raise RuntimeError("sounddevice is not installed")
+        self.stream = sd.InputStream(
+            samplerate=self.sample_rate,
+            blocksize=self.block_size,
+            channels=1,
+            dtype="float32",
+            device=self.device,
+            callback=self._callback,
+        )
+        self.stream.start()
+
+    def stop(self):
+        if self.stream is not None:
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+
+    def get_features(self):
+        with self._lock:
+            return {
+                "overall": float(self._overall),
+                "bands": {k: float(v) for k, v in self._bands.items()},
+            }
+
+
+class FfmpegLiveAudioAnalyzer(LiveAudioAnalyzer):
+    """Capture live input audio via ffmpeg (macOS AVFoundation fallback)."""
+
+    def __init__(self, device, envelope_fps=30, sample_rate=44100):
+        super().__init__(device, envelope_fps=envelope_fps, sample_rate=sample_rate)
+        self._reader_thread = None
+        self._stop_event = threading.Event()
+        self._process = None
+
+    def _resolve_avfoundation_device(self):
+        raw = str(self.device) if self.device is not None else "0"
+        if raw in {"__default__", "default", "None"}:
+            return "0"
+        if raw.startswith("avf:"):
+            return raw.split(":", 1)[1]
+        if raw.startswith("index:"):
+            return raw.split(":", 1)[1]
+        if raw.isdigit():
+            return raw
+        return "0"
+
+    def start(self):
+        if platform.system() != "Darwin":
+            raise RuntimeError("ffmpeg live analyzer fallback currently supports macOS only")
+
+        audio_index = self._resolve_avfoundation_device()
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-f", "avfoundation",
+            "-i", f":{audio_index}",
+            "-ac", "1",
+            "-ar", str(self.sample_rate),
+            "-f", "f32le",
+            "-"
+        ]
+        self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self._stop_event.clear()
+
+        def _reader():
+            block = self.block_size
+            need_bytes = block * 4  # f32le mono
+            while not self._stop_event.is_set() and self._process and self._process.stdout:
+                chunk = self._process.stdout.read(need_bytes)
+                if not chunk:
+                    break
+                mono = np.frombuffer(chunk, dtype=np.float32)
+                if mono.size > 0:
+                    self._update_features(mono)
+
+        self._reader_thread = threading.Thread(target=_reader, daemon=True)
+        self._reader_thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._process is not None:
+            try:
+                self._process.terminate()
+            except Exception:
+                pass
+            self._process = None
+        self._reader_thread = None
+
+
 def _current_audio_features(audio_envelope, audio_start_time):
     """Get current normalized overall + per-band levels for looped playback time."""
     if not audio_envelope or audio_start_time is None:
@@ -351,36 +520,115 @@ def play_realtime(imgs, args):
     frame_time = 1.0 / args.fps  # Time per frame in seconds
 
     # Initialize audio if provided
-    audio_thread = None
     audio_start_time = None
     reactive_enabled = bool(getattr(args, "reactive", False))
+    active_audio_source = "none"
+    live_audio_analyzer = None
+    current_audio_device = getattr(args, "audio_device", None)
     audio_envelope = None
-    if hasattr(args, 'audio') and args.audio and args.audio.exists():
-        if reactive_enabled:
-            audio_envelope = _build_audio_envelope(args.audio, envelope_fps=max(args.fps, 24))
-            if audio_envelope is None:
-                reactive_enabled = False
-                logging.warning("Reactive mode disabled: audio analysis unavailable for this file/environment.")
-            else:
-                logging.info("Reactive mode enabled: stackable pulse/warp/color/glow/strobe/trails are active.")
+    audio_file = None
+    if hasattr(args, 'audio') and args.audio:
+        candidate_path = Path(str(args.audio))
+        if candidate_path.exists() and candidate_path.is_file():
+            audio_file = candidate_path
+
+    if current_audio_device and str(current_audio_device).strip() == "__file__" and not audio_file:
+        current_audio_device = None
+
+    if reactive_enabled and current_audio_device and str(current_audio_device).strip() != "__file__":
+        if SOUNDDEVICE_AVAILABLE:
+            try:
+                live_audio_analyzer = LiveAudioAnalyzer(current_audio_device, envelope_fps=max(args.fps, 24))
+                live_audio_analyzer.start()
+                active_audio_source = "device"
+                logging.info(f"Reactive source: live input device ({current_audio_device})")
+            except Exception as e:
+                logging.error(f"Failed to start live audio input device {current_audio_device}: {e}")
+                active_audio_source = "none"
+        elif platform.system() == "Darwin":
+            try:
+                live_audio_analyzer = FfmpegLiveAudioAnalyzer(current_audio_device, envelope_fps=max(args.fps, 24))
+                live_audio_analyzer.start()
+                active_audio_source = "device"
+                logging.info(f"Reactive source: ffmpeg/AVFoundation input ({current_audio_device})")
+            except Exception as e:
+                logging.error(f"Failed to start ffmpeg live audio input {current_audio_device}: {e}")
+                active_audio_source = "none"
+        else:
+            logging.warning("Reactive device mode requested but sounddevice is not available.")
+            active_audio_source = "none"
+
+    def stop_audio_file_playback():
+        nonlocal audio_start_time
         if AUDIO_AVAILABLE:
             try:
+                if pygame.mixer.get_init():
+                    pygame.mixer.music.stop()
+            except Exception:
+                pass
+        audio_start_time = None
+
+    def start_audio_file_playback(file_path):
+        nonlocal audio_start_time
+        if not AUDIO_AVAILABLE or file_path is None:
+            return
+        try:
+            if not pygame.mixer.get_init():
                 pygame.mixer.init()
-                audio_thread = threading.Thread(target=_play_audio_loop, args=(args.audio,), daemon=True)
-                audio_thread.start()
-                audio_start_time = time.time()
-                logging.info(f"Started audio playback: {args.audio}")
-            except Exception as e:
-                logging.error(f"Failed to initialize audio: {e}")
-                if reactive_enabled:
-                    reactive_enabled = False
-                    logging.warning("Reactive mode disabled: audio playback could not be started.")
+            pygame.mixer.music.load(str(file_path))
+            pygame.mixer.music.play(-1)
+            audio_start_time = time.time()
+            logging.info(f"Started audio playback: {file_path}")
+        except Exception as e:
+            logging.error(f"Failed to initialize audio playback for {file_path}: {e}")
+
+    def sync_audio_file_setting(settings_obj):
+        """Reload file-track audio if the selected file path changed."""
+        nonlocal audio_file, audio_envelope, active_audio_source
+        desired_audio = getattr(settings_obj, "audio", getattr(args, "audio", "")) or ""
+        desired_audio = str(desired_audio).strip()
+        current_audio = str(audio_file) if audio_file is not None else ""
+        if desired_audio == current_audio:
+            return
+
+        stop_audio_file_playback()
+        if desired_audio:
+            cand = Path(desired_audio)
+            if cand.exists() and cand.is_file():
+                audio_file = cand
+                audio_envelope = None
+                if reactive_enabled and str(current_audio_device).strip() == "__file__":
+                    audio_envelope = _build_audio_envelope(audio_file, envelope_fps=max(args.fps, 24))
+                if str(current_audio_device).strip() == "__file__":
+                    start_audio_file_playback(audio_file)
+                    active_audio_source = "file"
+                logging.info(f"Loaded audio file track: {audio_file}")
+            else:
+                audio_file = None
+                if str(current_audio_device).strip() == "__file__":
+                    active_audio_source = "none"
+                logging.warning(f"Configured audio file does not exist: {desired_audio}")
+        else:
+            audio_file = None
+            audio_envelope = None
+            if str(current_audio_device).strip() == "__file__":
+                active_audio_source = "none"
+
+    if audio_file:
+        if reactive_enabled:
+            if active_audio_source != "device":
+                audio_envelope = _build_audio_envelope(audio_file, envelope_fps=max(args.fps, 24))
+                if audio_envelope is None:
+                    active_audio_source = "none"
+                    logging.warning("Reactive file-source analysis unavailable for this file/environment.")
+                else:
+                    active_audio_source = "file"
+                    logging.info("Reactive mode enabled: stackable pulse/warp/color/glow/strobe/trails are active.")
+        if AUDIO_AVAILABLE:
+            start_audio_file_playback(audio_file)
         else:
             logging.warning("Audio file provided but pygame is not available. Install pygame for audio support.")
-            if reactive_enabled:
-                reactive_enabled = False
-                logging.warning("Reactive mode disabled: pygame is required for synced audio playback.")
-    elif hasattr(args, 'audio') and args.audio and not args.audio.exists():
+    elif hasattr(args, 'audio') and args.audio and not current_audio_device:
         logging.error(f"Audio file not found: {args.audio}")
 
     # Initialize web GUI controller if requested and available
@@ -393,12 +641,15 @@ def play_realtime(imgs, args):
             cli_overrides = set(getattr(args, "_cli_overrides", set()))
             base_keys = [
                 'fps', 'seconds_per_transition', 'hold', 'pixel_size',
-                'transition', 'easing', 'reactive_style',
+                'transition', 'easing', 'reactive_style', 'reactive_enabled',
+                'audio', 'audio_device',
                 'window_width', 'window_height', 'window_x', 'window_y',
             ]
             for key in base_keys:
                 if key in cli_overrides and hasattr(args, key):
                     web_controller.update_setting(key, getattr(args, key))
+            if 'reactive' in cli_overrides:
+                web_controller.update_setting('reactive_enabled', bool(getattr(args, 'reactive', False)))
             for key, value in DEFAULT_REACTIVE_CONTROLS.items():
                 if key in cli_overrides:
                     web_controller.update_setting(key, getattr(args, key, value))
@@ -454,8 +705,11 @@ def play_realtime(imgs, args):
                 'pixel_size': current_settings.pixel_size,
                 'transition': current_settings.transition,
                 'easing': current_settings.easing,
+                'reactive_enabled': getattr(current_settings, 'reactive_enabled', getattr(args, 'reactive', False)),
                 'reactive_style': getattr(current_settings, 'reactive_style', 'dramatic'),
                 'reactive_master_gain': getattr(current_settings, 'reactive_master_gain', 1.0),
+                'audio': getattr(current_settings, 'audio', ''),
+                'audio_device': getattr(current_settings, 'audio_device', ''),
                 'window_width': getattr(current_settings, 'window_width', W),
                 'window_height': getattr(current_settings, 'window_height', H),
                 'window_x': getattr(current_settings, 'window_x', 80),
@@ -511,6 +765,77 @@ def play_realtime(imgs, args):
             last_window_state = state
         except Exception:
             pass
+
+    def sync_reactive_audio_source(settings_obj):
+        """Switch reactive source between file and input device when requested."""
+        nonlocal current_audio_device, live_audio_analyzer, active_audio_source, audio_envelope, reactive_enabled
+        desired_enabled = bool(getattr(settings_obj, "reactive_enabled", getattr(args, "reactive", False)))
+        if desired_enabled != reactive_enabled:
+            reactive_enabled = desired_enabled
+            if not reactive_enabled:
+                if live_audio_analyzer is not None:
+                    live_audio_analyzer.stop()
+                    live_audio_analyzer = None
+                active_audio_source = "none"
+                return
+
+        if not reactive_enabled:
+            return
+        sync_audio_file_setting(settings_obj)
+        desired = getattr(settings_obj, "audio_device", current_audio_device)
+        desired = (str(desired).strip() if desired is not None else "")
+        if desired == "":
+            desired = "__file__" if audio_file else "__default__"
+        if desired == "__file__" and audio_file is None:
+            desired = "__default__"
+        if desired == current_audio_device:
+            return
+
+        if live_audio_analyzer is not None:
+            live_audio_analyzer.stop()
+            live_audio_analyzer = None
+
+        current_audio_device = desired
+        if desired == "__file__":
+            if audio_file is None:
+                active_audio_source = "none"
+                logging.warning("Audio source set to file, but no audio file is loaded.")
+            else:
+                if audio_envelope is None:
+                    audio_envelope = _build_audio_envelope(audio_file, envelope_fps=max(args.fps, 24))
+                active_audio_source = "file" if audio_envelope is not None else "none"
+                start_audio_file_playback(audio_file)
+                logging.info("Reactive source switched to audio file track.")
+            return
+
+        stop_audio_file_playback()
+
+        if not SOUNDDEVICE_AVAILABLE:
+            if platform.system() != "Darwin":
+                active_audio_source = "none"
+                logging.warning("Reactive source switch ignored: sounddevice not available.")
+                return
+            try:
+                live_audio_analyzer = FfmpegLiveAudioAnalyzer(desired, envelope_fps=max(args.fps, 24))
+                live_audio_analyzer.start()
+                active_audio_source = "device"
+                logging.info(f"Reactive source switched to ffmpeg/AVFoundation input ({desired}).")
+                return
+            except Exception as e:
+                active_audio_source = "none"
+                live_audio_analyzer = None
+                logging.error(f"Failed to switch to ffmpeg input {desired}: {e}")
+                return
+
+        try:
+            live_audio_analyzer = LiveAudioAnalyzer(desired, envelope_fps=max(args.fps, 24))
+            live_audio_analyzer.start()
+            active_audio_source = "device"
+            logging.info(f"Reactive source switched to live input device ({desired}).")
+        except Exception as e:
+            active_audio_source = "none"
+            live_audio_analyzer = None
+            logging.error(f"Failed to switch to audio device {desired}: {e}")
 
 
 
@@ -605,6 +930,8 @@ def play_realtime(imgs, args):
 
     current_settings = check_and_log_settings_changes()
     apply_window_settings(current_settings)
+    sync_audio_file_setting(current_settings)
+    sync_reactive_audio_source(current_settings)
     logging.warning("Starting realtime playback. Press 'q' to quit, 'p' to pause/resume, 'r' to restart.")
 
     paused = False
@@ -620,6 +947,8 @@ def play_realtime(imgs, args):
                 # Get current settings for dynamic frame timing
                 current_settings = check_and_log_settings_changes()
                 apply_window_settings(current_settings)
+                sync_audio_file_setting(current_settings)
+                sync_reactive_audio_source(current_settings)
                 current_frame_time = 1.0 / current_settings.fps
 
                 # Get next frame from buffer
@@ -635,7 +964,10 @@ def play_realtime(imgs, args):
 
                     # Display frame
                     if reactive_enabled:
-                        reactive_features = _current_audio_features(audio_envelope, audio_start_time)
+                        if active_audio_source == "device" and live_audio_analyzer is not None:
+                            reactive_features = live_audio_analyzer.get_features()
+                        else:
+                            reactive_features = _current_audio_features(audio_envelope, audio_start_time)
                         reactive_controls = _resolve_reactive_controls(current_settings)
                         frame = _apply_audio_reactive_effect(
                             frame,
@@ -772,6 +1104,18 @@ def play_realtime(imgs, args):
                     args.reactive_style = current_settings.get('reactive_style', 'dramatic')
                     settings_changed = True
 
+                if getattr(args, 'reactive', False) != bool(current_settings.get('reactive_enabled', getattr(args, 'reactive', False))):
+                    args.reactive = bool(current_settings.get('reactive_enabled', args.reactive))
+                    settings_changed = True
+
+                if getattr(args, 'audio_device', '') != current_settings.get('audio_device', ''):
+                    args.audio_device = current_settings.get('audio_device', '')
+                    settings_changed = True
+
+                if getattr(args, 'audio', '') != current_settings.get('audio', ''):
+                    args.audio = current_settings.get('audio', '')
+                    settings_changed = True
+
                 for key, default_value in DEFAULT_REACTIVE_CONTROLS.items():
                     current_value = current_settings.get(key, default_value)
                     if getattr(args, key, default_value) != current_value:
@@ -794,11 +1138,15 @@ def play_realtime(imgs, args):
                 break
 
     finally:
+        if live_audio_analyzer is not None:
+            live_audio_analyzer.stop()
+
         # Stop audio if it was playing
-        if audio_thread and AUDIO_AVAILABLE:
+        if AUDIO_AVAILABLE:
             try:
-                pygame.mixer.music.stop()
-                pygame.mixer.quit()
+                if pygame.mixer.get_init():
+                    pygame.mixer.music.stop()
+                    pygame.mixer.quit()
                 logging.debug("Audio playback stopped")
             except Exception as e:
                 logging.error(f"Error stopping audio: {e}")

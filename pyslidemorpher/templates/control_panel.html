@@ -278,6 +278,30 @@
                         <option value="extreme">Extreme</option>
                     </select>
                 </div>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="reactive-enabled">
+                        <label for="reactive-enabled">Reactive Enabled</label>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <label for="audio-device">Reactive Audio Source</label>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <select id="audio-device" style="flex:1;">
+                            <option value="__file__">Audio File Track</option>
+                            <option value="__default__">System Default Input</option>
+                        </select>
+                        <button type="button" onclick="loadAudioDevices(true)">Refresh</button>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <label for="audio-file-input">Audio File Track</label>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <input type="file" id="audio-file-input" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg" style="flex:1; color:white;">
+                        <button type="button" onclick="uploadAudioFile()">Load File</button>
+                    </div>
+                    <div style="margin-top:8px; font-size:12px; opacity:0.9;">Loaded: <span id="audio-file-label">(none)</span></div>
+                </div>
             </div>
 
             <!-- Reactive Mixer -->
@@ -419,10 +443,34 @@
 
         // Initialize the interface
         document.addEventListener('DOMContentLoaded', function() {
-            loadSettings();
+            loadAudioDevices().then(loadSettings);
             setupEventListeners();
             startStatusUpdates();
         });
+
+        async function loadAudioDevices(preserveSelection = true) {
+            try {
+                const response = await fetch('/api/audio-devices');
+                if (!response.ok) return;
+                const payload = await response.json();
+                const devices = payload.devices || [];
+                const select = document.getElementById('audio-device');
+                if (!select) return;
+                const existing = preserveSelection ? (settings.audio_device || select.value) : '';
+                select.innerHTML = '';
+                devices.forEach(dev => {
+                    const opt = document.createElement('option');
+                    opt.value = dev.id;
+                    opt.textContent = dev.name;
+                    select.appendChild(opt);
+                });
+                if (existing && [...select.options].some(o => o.value === existing)) {
+                    select.value = existing;
+                }
+            } catch (error) {
+                console.error('Failed to load audio devices:', error);
+            }
+        }
 
         // Load current settings from server
         async function loadSettings() {
@@ -449,13 +497,26 @@
                     updateValueDisplay(key.replaceAll('_', '-'), value);
                 }
             }
+            updateAudioFileLabel();
+        }
+
+        function updateAudioFileLabel() {
+            const label = document.getElementById('audio-file-label');
+            if (!label) return;
+            const full = settings.audio || '';
+            if (!full) {
+                label.textContent = '(none)';
+                return;
+            }
+            const parts = full.split(/[\\/]/);
+            label.textContent = parts[parts.length - 1] || full;
         }
 
         // Setup event listeners for all controls
         function setupEventListeners() {
             // Range inputs and selects
             const controls = ['fps', 'pixel-size', 'seconds-per-transition', 'hold', 
-                            'transition', 'easing', 'reactive-style',
+                            'transition', 'easing', 'reactive-style', 'reactive-enabled', 'audio-device',
                             'window-width', 'window-height', 'window-x', 'window-y',
                             'reactive-master-gain',
                             'pulse-enabled', 'pulse-strength', 'pulse-band',
@@ -515,6 +576,37 @@
             } catch (error) {
                 console.error('Failed to update setting:', error);
                 updateStatus('Error: Connection failed');
+            }
+        }
+
+        async function uploadAudioFile() {
+            const input = document.getElementById('audio-file-input');
+            if (!input || !input.files || input.files.length === 0) {
+                updateStatus('Select an audio file first');
+                return;
+            }
+            const file = input.files[0];
+            const form = new FormData();
+            form.append('file', file);
+            try {
+                const response = await fetch('/api/audio-file', {
+                    method: 'POST',
+                    body: form
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    updateStatus(`Upload failed: ${result.error || 'unknown error'}`);
+                    return;
+                }
+                settings.audio = result.audio;
+                settings.audio_device = '__file__';
+                const audioDevice = document.getElementById('audio-device');
+                if (audioDevice) audioDevice.value = '__file__';
+                updateAudioFileLabel();
+                updateStatus(`Loaded audio file: ${result.filename}`);
+            } catch (error) {
+                console.error('Failed to upload audio file:', error);
+                updateStatus('Upload failed: connection error');
             }
         }
 

@@ -57,8 +57,10 @@ def main():
     ap.add_argument("--transition", type=str, default="default",
                     choices=["default", "swarm", "tornado", "swirl", "drip", "rain", "sorted", "hue-sorted", "random"],
                     help="Select the type of transition. Use 'random' to randomly choose a different transition for each frame transition.")
-    ap.add_argument("--audio", type=Path, default=None,
-                    help="Audio file to include in the output video")
+    ap.add_argument("--audio", type=str, default=None,
+                    help="Audio source: file path or (with --realtime) input device name")
+    ap.add_argument("--audio-device", type=str, default=None,
+                    help="Realtime reactive input device (default, index:N, or device name)")
     ap.add_argument("--realtime", action="store_true",
                     help="Play slideshow in realtime instead of writing to file")
     ap.add_argument("--reactive", action="store_true",
@@ -114,8 +116,16 @@ def main():
     if args.reactive and not args.realtime:
         print("Error: --reactive can only be used with --realtime mode")
         raise SystemExit(1)
-    if args.reactive and not args.audio:
-        print("Error: --reactive requires --audio")
+
+    audio_candidate = Path(args.audio) if args.audio else None
+    if args.realtime and args.audio and not (audio_candidate.exists() and audio_candidate.is_file()) and not args.audio_device:
+        # Convenience: allow --audio <device-name> in realtime mode.
+        args.audio_device = args.audio
+        args.audio = None
+        cli_overrides.add("audio_device")
+
+    if args.audio_device and not args.realtime:
+        print("Error: --audio-device can only be used with --realtime mode")
         raise SystemExit(1)
 
     # Configure logging
@@ -182,8 +192,12 @@ def main():
         play_realtime(imgs, args)
         return
 
+    if args.audio_device:
+        logging.error("--audio-device is only supported in --realtime mode.")
+        raise SystemExit(1)
+
     # Check if audio file exists if provided
-    if args.audio and not args.audio.exists():
+    if args.audio and not Path(args.audio).exists():
         logging.error(f"Audio file not found: {args.audio}")
         raise SystemExit(1)
 

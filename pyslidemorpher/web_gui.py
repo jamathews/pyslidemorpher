@@ -5,10 +5,14 @@ Provides a browser interface to tweak slideshow parameters in real-time.
 
 import json
 import logging
+import platform
+import re
+import subprocess
 import threading
 import time
 from pathlib import Path
 from queue import Queue
+from uuid import uuid4
 
 try:
     from flask import Flask, render_template, request, jsonify
@@ -16,12 +20,26 @@ try:
 except ImportError:
     FLASK_AVAILABLE = False
 
+try:
+    import sounddevice as sd
+    SOUNDDEVICE_AVAILABLE = True
+except ImportError:
+    SOUNDDEVICE_AVAILABLE = False
+
 SETTINGS_FILE_NAME = "pyslidemorpher_web_settings.json"
+UPLOADS_DIR_NAME = ".pyslidemorpher_uploads"
 
 
 def get_settings_file_path():
     """Get the settings file path in the current working directory."""
     return Path.cwd() / SETTINGS_FILE_NAME
+
+
+def get_uploads_dir():
+    """Get uploads directory path, creating it if missing."""
+    uploads = Path.cwd() / UPLOADS_DIR_NAME
+    uploads.mkdir(parents=True, exist_ok=True)
+    return uploads
 
 
 def load_persisted_settings():
@@ -38,6 +56,57 @@ def load_persisted_settings():
         return {}
 
 
+def list_audio_input_devices():
+    """Return audio input devices for web GUI selection."""
+    devices = [{"id": "__file__", "name": "Audio File Track"}]
+    if not SOUNDDEVICE_AVAILABLE:
+        if platform.system() == "Darwin":
+            devices.append({"id": "__default__", "name": "System Default Input"})
+            try:
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-f", "avfoundation",
+                    "-list_devices", "true",
+                    "-i", ""
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                text = (proc.stderr or "") + "\n" + (proc.stdout or "")
+                in_audio = False
+                for line in text.splitlines():
+                    if "AVFoundation audio devices" in line:
+                        in_audio = True
+                        continue
+                    if "AVFoundation video devices" in line:
+                        in_audio = False
+                    if not in_audio:
+                        continue
+                    m = re.search(r"\[(\d+)\]\s+(.+)$", line.strip())
+                    if m:
+                        idx = m.group(1)
+                        name = m.group(2).strip()
+                        devices.append({"id": f"avf:{idx}", "name": name})
+            except Exception as e:
+                logging.warning(f"Could not enumerate AVFoundation devices via ffmpeg: {e}")
+        else:
+            devices.append({"id": "__default__", "name": "Default Input (sounddevice unavailable)"})
+        return devices
+    devices.append({"id": "__default__", "name": "System Default Input"})
+    try:
+        queried = sd.query_devices()
+        for idx, dev in enumerate(queried):
+            try:
+                max_in = int(dev.get('max_input_channels', 0))
+            except Exception:
+                max_in = 0
+            if max_in > 0:
+                name = str(dev.get('name', f'Input {idx}'))
+                devices.append({"id": f"index:{idx}", "name": name})
+    except Exception as e:
+        logging.warning(f"Could not enumerate audio devices: {e}")
+    return devices
+
+
 class RealtimeController:
     """Controller class to manage realtime slideshow settings."""
 
@@ -49,7 +118,10 @@ class RealtimeController:
             'pixel_size': 4,
             'transition': 'default',
             'easing': 'smoothstep',
+            'audio': '',
+            'reactive_enabled': False,
             'reactive_style': 'dramatic',
+            'audio_device': '__file__',
             'reactive_master_gain': 1.0,
             'pulse_enabled': True,
             'pulse_strength': 1.0,
@@ -112,12 +184,16 @@ class RealtimeController:
                     value = float(value)
                 elif key == 'pixel_size':
                     value = int(value)
-                elif key in ['paused']:
+                elif key in ['paused', 'reactive_enabled']:
                     value = bool(value)
                 elif key == 'reactive_style':
                     value = str(value)
                     if value not in ['subtle', 'dramatic', 'extreme']:
                         value = 'dramatic'
+                elif key == 'audio':
+                    value = str(value or '')
+                elif key == 'audio_device':
+                    value = str(value)
                 elif key.endswith('_enabled'):
                     if isinstance(value, bool):
                         pass
@@ -198,6 +274,11 @@ def create_web_app():
         """API endpoint to get current settings."""
         return jsonify(controller.get_settings())
 
+    @app.route('/api/audio-devices', methods=['GET'])
+    def get_audio_devices():
+        """API endpoint to list available audio input devices."""
+        return jsonify({'devices': list_audio_input_devices()})
+
     @app.route('/api/settings', methods=['POST'])
     def update_settings():
         """API endpoint to update settings."""
@@ -211,6 +292,31 @@ def create_web_app():
                 updated[key] = value
 
         return jsonify({'updated': updated})
+
+    @app.route('/api/audio-file', methods=['POST'])
+    def upload_audio_file():
+        """Upload an audio file from the web UI and activate file-track source."""
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part'}), 400
+        file_obj = request.files['file']
+        if not file_obj or not file_obj.filename:
+            return jsonify({'error': 'No file selected'}), 400
+
+        safe_name = Path(file_obj.filename).name
+        ext = Path(safe_name).suffix.lower()
+        allowed = {'.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg'}
+        if ext not in allowed:
+            return jsonify({'error': f'Unsupported audio format: {ext}'}), 400
+
+        dest = get_uploads_dir() / f"{uuid4().hex}_{safe_name}"
+        try:
+            file_obj.save(str(dest))
+        except Exception as e:
+            return jsonify({'error': f'Failed to save file: {e}'}), 500
+
+        controller.update_setting('audio', str(dest))
+        controller.update_setting('audio_device', '__file__')
+        return jsonify({'status': 'ok', 'audio': str(dest), 'filename': safe_name})
 
     @app.route('/api/command', methods=['POST'])
     def send_command():
