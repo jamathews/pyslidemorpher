@@ -6,6 +6,7 @@ Contains the main function and argument parsing logic.
 import argparse
 import logging
 import random
+import sys
 import time
 import subprocess
 from pathlib import Path
@@ -25,6 +26,17 @@ from .transitions import (
     make_sorted_transition_frames,
     make_hue_sorted_transition_frames
 )
+
+
+def _get_cli_overrides(argv):
+    """Return argument names explicitly provided on the command line."""
+    overrides = set()
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        flag = token.split("=", 1)[0]
+        overrides.add(flag[2:].replace("-", "_"))
+    return overrides
 
 
 def main():
@@ -60,7 +72,37 @@ def main():
                     help="Set the log level for the script")
     ap.add_argument("--web-gui", action="store_true",
                     help="Enable web-based GUI for realtime control (requires --realtime and Flask)")
+    ap.add_argument("--window-width", type=int, default=None,
+                    help="Realtime window width (overrides saved web GUI setting)")
+    ap.add_argument("--window-height", type=int, default=None,
+                    help="Realtime window height (overrides saved web GUI setting)")
+    ap.add_argument("--window-x", type=int, default=None,
+                    help="Realtime window X position (overrides saved web GUI setting)")
+    ap.add_argument("--window-y", type=int, default=None,
+                    help="Realtime window Y position (overrides saved web GUI setting)")
     args = ap.parse_args()
+    cli_overrides = _get_cli_overrides(sys.argv[1:])
+    args._cli_overrides = cli_overrides
+
+    # Load persisted web GUI settings; explicit CLI flags always take precedence.
+    try:
+        from .web_gui import load_persisted_settings
+        persisted = load_persisted_settings()
+    except Exception:
+        persisted = {}
+    if isinstance(persisted, dict):
+        for key, value in persisted.items():
+            if hasattr(args, key) and key not in cli_overrides:
+                setattr(args, key, value)
+
+    if args.window_width is None:
+        args.window_width = args.size[0]
+    if args.window_height is None:
+        args.window_height = args.size[1]
+    if args.window_x is None:
+        args.window_x = 80
+    if args.window_y is None:
+        args.window_y = 80
 
 
     # Validate web GUI requirements

@@ -16,6 +16,27 @@ try:
 except ImportError:
     FLASK_AVAILABLE = False
 
+SETTINGS_FILE_NAME = "pyslidemorpher_web_settings.json"
+
+
+def get_settings_file_path():
+    """Get the settings file path in the current working directory."""
+    return Path.cwd() / SETTINGS_FILE_NAME
+
+
+def load_persisted_settings():
+    """Load persisted settings from disk if they exist and are valid."""
+    settings_file = get_settings_file_path()
+    if not settings_file.exists():
+        return {}
+    try:
+        with settings_file.open('r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logging.warning(f"Failed to load settings file {settings_file}: {e}")
+        return {}
+
 
 class RealtimeController:
     """Controller class to manage realtime slideshow settings."""
@@ -54,10 +75,26 @@ class RealtimeController:
             'eq_high_mid_gain': 1.0,
             'eq_treble_gain': 1.0,
             'eq_air_gain': 1.0,
+            'window_width': 1280,
+            'window_height': 720,
+            'window_x': 80,
+            'window_y': 80,
             'paused': False
         }
+        persisted = load_persisted_settings()
+        if persisted:
+            self.settings.update({k: v for k, v in persisted.items() if k in self.settings})
         self.settings_lock = threading.Lock()
         self.command_queue = Queue()
+
+    def save_settings(self):
+        """Persist settings to disk."""
+        settings_file = get_settings_file_path()
+        try:
+            with settings_file.open('w', encoding='utf-8') as f:
+                json.dump(self.settings, f, indent=2)
+        except Exception as e:
+            logging.warning(f"Failed to persist settings to {settings_file}: {e}")
 
     def get_settings(self):
         """Get current settings thread-safely."""
@@ -94,8 +131,17 @@ class RealtimeController:
                     value = str(value)
                     if value not in ['sub', 'bass', 'low_mid', 'high_mid', 'treble', 'air']:
                         value = 'bass'
+                elif key in ['window_width', 'window_height', 'window_x', 'window_y']:
+                    value = int(value)
+                    if key == 'window_width':
+                        value = max(320, min(7680, value))
+                    elif key == 'window_height':
+                        value = max(240, min(4320, value))
+                    elif key in ['window_x', 'window_y']:
+                        value = max(-4000, min(4000, value))
 
                 self.settings[key] = value
+                self.save_settings()
                 logging.info(f"Updated setting {key} to {value}")
                 return True
         return False

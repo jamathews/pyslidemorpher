@@ -121,6 +121,11 @@ Once the slideshow is running, open `http://localhost:5001` in your browser to a
 - **Restart**: Restart the slideshow from the beginning
 - **Next/Previous**: Skip between images
 
+#### Persistence
+- Web GUI settings are saved automatically to `pyslidemorpher_web_settings.json` in the current working directory whenever you change a control.
+- On startup, settings are loaded from this file.
+- Explicit CLI flags (for example `--fps`, `--transition`, `--reactive-style`, `--window-width`) override file values for that run.
+
 ## Technical Details
 
 ### Architecture

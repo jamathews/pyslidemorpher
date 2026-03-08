@@ -208,6 +208,26 @@
                     <input type="range" id="pixel-size" min="1" max="50" value="4">
                     <span class="value-display" id="pixel-size-value">4</span>
                 </div>
+                <div class="control-item">
+                    <label for="window-width">Window Width</label>
+                    <input type="range" id="window-width" min="320" max="3840" step="10" value="1280">
+                    <span class="value-display" id="window-width-value">1280</span>
+                </div>
+                <div class="control-item">
+                    <label for="window-height">Window Height</label>
+                    <input type="range" id="window-height" min="240" max="2160" step="10" value="720">
+                    <span class="value-display" id="window-height-value">720</span>
+                </div>
+                <div class="control-item">
+                    <label for="window-x">Window X Position</label>
+                    <input type="range" id="window-x" min="-2000" max="3000" step="10" value="80">
+                    <span class="value-display" id="window-x-value">80</span>
+                </div>
+                <div class="control-item">
+                    <label for="window-y">Window Y Position</label>
+                    <input type="range" id="window-y" min="-2000" max="3000" step="10" value="80">
+                    <span class="value-display" id="window-y-value">80</span>
+                </div>
             </div>
 
             <!-- Timing Settings -->
@@ -436,6 +456,7 @@
             // Range inputs and selects
             const controls = ['fps', 'pixel-size', 'seconds-per-transition', 'hold', 
                             'transition', 'easing', 'reactive-style',
+                            'window-width', 'window-height', 'window-x', 'window-y',
                             'reactive-master-gain',
                             'pulse-enabled', 'pulse-strength', 'pulse-band',
                             'warp-enabled', 'warp-strength', 'warp-band',

@@ -389,16 +389,19 @@ def play_realtime(imgs, args):
     if hasattr(args, 'web_gui') and args.web_gui and WEB_GUI_AVAILABLE:
         try:
             web_controller = get_controller()
-            # Initialize controller with current args
-            web_controller.update_setting('fps', args.fps)
-            web_controller.update_setting('seconds_per_transition', args.seconds_per_transition)
-            web_controller.update_setting('hold', args.hold)
-            web_controller.update_setting('pixel_size', args.pixel_size)
-            web_controller.update_setting('transition', args.transition)
-            web_controller.update_setting('easing', args.easing)
-            web_controller.update_setting('reactive_style', getattr(args, 'reactive_style', 'dramatic'))
+            # Apply only explicit CLI overrides so persisted settings remain the startup baseline.
+            cli_overrides = set(getattr(args, "_cli_overrides", set()))
+            base_keys = [
+                'fps', 'seconds_per_transition', 'hold', 'pixel_size',
+                'transition', 'easing', 'reactive_style',
+                'window_width', 'window_height', 'window_x', 'window_y',
+            ]
+            for key in base_keys:
+                if key in cli_overrides and hasattr(args, key):
+                    web_controller.update_setting(key, getattr(args, key))
             for key, value in DEFAULT_REACTIVE_CONTROLS.items():
-                web_controller.update_setting(key, getattr(args, key, value))
+                if key in cli_overrides:
+                    web_controller.update_setting(key, getattr(args, key, value))
 
             # Start web server
             web_server_thread = start_web_server()
@@ -453,6 +456,10 @@ def play_realtime(imgs, args):
                 'easing': current_settings.easing,
                 'reactive_style': getattr(current_settings, 'reactive_style', 'dramatic'),
                 'reactive_master_gain': getattr(current_settings, 'reactive_master_gain', 1.0),
+                'window_width': getattr(current_settings, 'window_width', W),
+                'window_height': getattr(current_settings, 'window_height', H),
+                'window_x': getattr(current_settings, 'window_x', 80),
+                'window_y': getattr(current_settings, 'window_y', 80),
             }
 
         # Compare with previous settings
@@ -473,7 +480,7 @@ def play_realtime(imgs, args):
 
     # Create OpenCV window with optimizations
     window_name = "PySlidemorpher - Realtime Slideshow"
-    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
 
     # Enable GPU acceleration if available
@@ -486,6 +493,24 @@ def play_realtime(imgs, args):
 
     # Frame buffer for smoother playback
     frame_buffer = Queue(maxsize=args.fps * 2)  # Buffer 2 seconds worth of frames
+    last_window_state = None
+
+    def apply_window_settings(settings_obj):
+        """Apply OpenCV window geometry from current settings if changed."""
+        nonlocal last_window_state
+        width = int(getattr(settings_obj, "window_width", W) or W)
+        height = int(getattr(settings_obj, "window_height", H) or H)
+        x = int(getattr(settings_obj, "window_x", 80) or 80)
+        y = int(getattr(settings_obj, "window_y", 80) or 80)
+        state = (width, height, x, y)
+        if state == last_window_state:
+            return
+        try:
+            cv2.resizeWindow(window_name, width, height)
+            cv2.moveWindow(window_name, x, y)
+            last_window_state = state
+        except Exception:
+            pass
 
 
 
@@ -579,6 +604,7 @@ def play_realtime(imgs, args):
     generator_thread.start()
 
     current_settings = check_and_log_settings_changes()
+    apply_window_settings(current_settings)
     logging.warning("Starting realtime playback. Press 'q' to quit, 'p' to pause/resume, 'r' to restart.")
 
     paused = False
@@ -593,6 +619,7 @@ def play_realtime(imgs, args):
             if not paused:
                 # Get current settings for dynamic frame timing
                 current_settings = check_and_log_settings_changes()
+                apply_window_settings(current_settings)
                 current_frame_time = 1.0 / current_settings.fps
 
                 # Get next frame from buffer
@@ -735,6 +762,11 @@ def play_realtime(imgs, args):
                 if args.easing != current_settings['easing']:
                     args.easing = current_settings['easing']
                     settings_changed = True
+
+                for key in ['window_width', 'window_height', 'window_x', 'window_y']:
+                    if getattr(args, key, None) != current_settings.get(key):
+                        setattr(args, key, current_settings.get(key))
+                        settings_changed = True
 
                 if getattr(args, 'reactive_style', 'dramatic') != current_settings.get('reactive_style', 'dramatic'):
                     args.reactive_style = current_settings.get('reactive_style', 'dramatic')
