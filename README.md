@@ -141,6 +141,18 @@ python pyslidemorpher.py /path/to/photos \
 | `--web-gui` | Enable web control interface | False |
 | `--seed` | Random seed for reproducible results | Random |
 
+## Testing
+
+Using Pipenv:
+
+```bash
+# Run tests
+PIPENV_VENV_IN_PROJECT=1 pipenv run test
+
+# Run tests with coverage (fails if coverage drops below 23%)
+PIPENV_VENV_IN_PROJECT=1 pipenv run test-cov
+```
+
 ## Technical Details
 
 ### Supported Image Formats

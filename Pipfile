@@ -13,6 +13,13 @@ pygame = "*"
 flask = "*"
 
 [dev-packages]
+pytest = "*"
+pytest-cov = "*"
+coverage = "*"
+
+[scripts]
+test = "pytest -q"
+test-cov = "pytest -q --cov=pyslidemorpher --cov-report=term-missing --cov-fail-under=23"
 
 [requires]
 python_version = "3.13"

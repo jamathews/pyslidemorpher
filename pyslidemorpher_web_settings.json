@@ -1,5 +1,5 @@
 {
-  "fps": 30,
+  "fps": 60,
   "seconds_per_transition": 2.0,
   "hold": 30.0,
   "pixel_size": 1,
