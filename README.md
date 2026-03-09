@@ -98,9 +98,12 @@ python pyslidemorpher.py /path/to/photos --realtime
 python pyslidemorpher.py /path/to/photos \
     --realtime \
     --reactive \
-    --audio music.mp3 \
-    --audio-threshold 0.15
+    --audio "default" \
+    --reactive-style extreme
 ```
+
+`--audio` accepts either a file path or, in realtime mode, an input device selector (for example `default`, `index:2`, or a device name). You can also use `--audio-device`.
+You can also start with no audio arguments and enable reactive mode + pick a device from the web GUI.
 
 ### Web GUI Control
 ```bash
@@ -129,12 +132,32 @@ python pyslidemorpher.py /path/to/photos \
 | `--transition` | Transition type | default |
 | `--easing` | Animation easing function | smoothstep |
 | `--audio` | Audio file to include | None |
+| `--audio-device` | Realtime input device for reactive analysis | None |
 | `--realtime` | Real-time playback mode | False |
 | `--reactive` | Audio-reactive transitions | False |
+| `--reactive-style` | Reactive visual style (`subtle`, `dramatic`, `extreme`) | dramatic |
 | `--audio-threshold` | Audio sensitivity (0.0-1.0) | 0.1 |
 | `--use-pytorch` | Enable GPU acceleration | False |
 | `--web-gui` | Enable web control interface | False |
 | `--seed` | Random seed for reproducible results | Random |
+
+## Testing
+
+Using Pipenv:
+
+```bash
+# Run tests
+PIPENV_VENV_IN_PROJECT=1 pipenv run test
+
+# Run tests with coverage (fails if coverage drops below 23%)
+PIPENV_VENV_IN_PROJECT=1 pipenv run test-cov
+```
+
+PyCharm:
+1. Select run configuration `Tests (Pipenv)`.
+2. Run it once.
+3. In the Run tool window, click `Rerun Automatically` (circular arrows icon).
+4. Keep that run window open while coding; tests rerun on file changes.
 
 ## Technical Details
 

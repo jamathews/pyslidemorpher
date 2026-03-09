@@ -57,6 +57,12 @@
             margin-bottom: 15px;
         }
 
+        .effect-row {
+            border-top: 1px solid rgba(255, 255, 255, 0.18);
+            padding-top: 12px;
+            margin-top: 12px;
+        }
+
         label {
             display: block;
             margin-bottom: 5px;
@@ -202,6 +208,26 @@
                     <input type="range" id="pixel-size" min="1" max="50" value="4">
                     <span class="value-display" id="pixel-size-value">4</span>
                 </div>
+                <div class="control-item">
+                    <label for="window-width">Window Width</label>
+                    <input type="range" id="window-width" min="320" max="3840" step="10" value="1280">
+                    <span class="value-display" id="window-width-value">1280</span>
+                </div>
+                <div class="control-item">
+                    <label for="window-height">Window Height</label>
+                    <input type="range" id="window-height" min="240" max="2160" step="10" value="720">
+                    <span class="value-display" id="window-height-value">720</span>
+                </div>
+                <div class="control-item">
+                    <label for="window-x">Window X Position</label>
+                    <input type="range" id="window-x" min="-2000" max="3000" step="10" value="80">
+                    <span class="value-display" id="window-x-value">80</span>
+                </div>
+                <div class="control-item">
+                    <label for="window-y">Window Y Position</label>
+                    <input type="range" id="window-y" min="-2000" max="3000" step="10" value="80">
+                    <span class="value-display" id="window-y-value">80</span>
+                </div>
             </div>
 
             <!-- Timing Settings -->
@@ -244,6 +270,155 @@
                         <option value="cubic">Cubic</option>
                     </select>
                 </div>
+                <div class="control-item">
+                    <label for="reactive-style">Reactive Style</label>
+                    <select id="reactive-style">
+                        <option value="subtle">Subtle</option>
+                        <option value="dramatic">Dramatic</option>
+                        <option value="extreme">Extreme</option>
+                    </select>
+                </div>
+                <div class="control-item">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="reactive-enabled">
+                        <label for="reactive-enabled">Reactive Enabled</label>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <label for="audio-device">Reactive Audio Source</label>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <select id="audio-device" style="flex:1;">
+                            <option value="__file__">Audio File Track</option>
+                            <option value="__default__">System Default Input</option>
+                        </select>
+                        <button type="button" onclick="loadAudioDevices(true)">Refresh</button>
+                    </div>
+                </div>
+                <div class="control-item">
+                    <label for="audio-file-input">Audio File Track</label>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <input type="file" id="audio-file-input" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg" style="flex:1; color:white;">
+                        <button type="button" onclick="uploadAudioFile()">Load File</button>
+                    </div>
+                    <div style="margin-top:8px; font-size:12px; opacity:0.9;">Loaded: <span id="audio-file-label">(none)</span></div>
+                </div>
+            </div>
+
+            <!-- Reactive Mixer -->
+            <div class="control-group">
+                <h3>🔥 Reactive Mixer</h3>
+                <div class="control-item">
+                    <label for="reactive-master-gain">Master Reactive Gain</label>
+                    <input type="range" id="reactive-master-gain" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="reactive-master-gain-value">1.00x</span>
+                </div>
+
+                <div class="effect-row">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="pulse-enabled" checked>
+                        <label for="pulse-enabled">Pulse/Spin</label>
+                    </div>
+                    <input type="range" id="pulse-strength" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="pulse-strength-value">1.00x</span>
+                    <select id="pulse-band">
+                        <option value="sub">Sub</option><option value="bass" selected>Bass</option><option value="low_mid">Low Mid</option><option value="high_mid">High Mid</option><option value="treble">Treble</option><option value="air">Air</option>
+                    </select>
+                </div>
+
+                <div class="effect-row">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="warp-enabled" checked>
+                        <label for="warp-enabled">Radial Warp</label>
+                    </div>
+                    <input type="range" id="warp-strength" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="warp-strength-value">1.00x</span>
+                    <select id="warp-band">
+                        <option value="sub">Sub</option><option value="bass">Bass</option><option value="low_mid" selected>Low Mid</option><option value="high_mid">High Mid</option><option value="treble">Treble</option><option value="air">Air</option>
+                    </select>
+                </div>
+
+                <div class="effect-row">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="color-enabled" checked>
+                        <label for="color-enabled">Color/Prism</label>
+                    </div>
+                    <input type="range" id="color-strength" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="color-strength-value">1.00x</span>
+                    <select id="color-band">
+                        <option value="sub">Sub</option><option value="bass">Bass</option><option value="low_mid">Low Mid</option><option value="high_mid" selected>High Mid</option><option value="treble">Treble</option><option value="air">Air</option>
+                    </select>
+                </div>
+
+                <div class="effect-row">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="glow-enabled" checked>
+                        <label for="glow-enabled">Glow/Edges</label>
+                    </div>
+                    <input type="range" id="glow-strength" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="glow-strength-value">1.00x</span>
+                    <select id="glow-band">
+                        <option value="sub">Sub</option><option value="bass">Bass</option><option value="low_mid">Low Mid</option><option value="high_mid">High Mid</option><option value="treble" selected>Treble</option><option value="air">Air</option>
+                    </select>
+                </div>
+
+                <div class="effect-row">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="strobe-enabled" checked>
+                        <label for="strobe-enabled">Strobe</label>
+                    </div>
+                    <input type="range" id="strobe-strength" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="strobe-strength-value">1.00x</span>
+                    <select id="strobe-band">
+                        <option value="sub">Sub</option><option value="bass" selected>Bass</option><option value="low_mid">Low Mid</option><option value="high_mid">High Mid</option><option value="treble">Treble</option><option value="air">Air</option>
+                    </select>
+                </div>
+
+                <div class="effect-row">
+                    <div class="checkbox-container">
+                        <input type="checkbox" id="trails-enabled" checked>
+                        <label for="trails-enabled">Trails</label>
+                    </div>
+                    <input type="range" id="trails-strength" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="trails-strength-value">1.00x</span>
+                    <select id="trails-band">
+                        <option value="sub" selected>Sub</option><option value="bass">Bass</option><option value="low_mid">Low Mid</option><option value="high_mid">High Mid</option><option value="treble">Treble</option><option value="air">Air</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Audio EQ -->
+            <div class="control-group">
+                <h3>🎚️ Reactive EQ</h3>
+                <div class="control-item">
+                    <label for="eq-sub-gain">Sub (20-80 Hz)</label>
+                    <input type="range" id="eq-sub-gain" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="eq-sub-gain-value">1.00x</span>
+                </div>
+                <div class="control-item">
+                    <label for="eq-bass-gain">Bass (80-250 Hz)</label>
+                    <input type="range" id="eq-bass-gain" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="eq-bass-gain-value">1.00x</span>
+                </div>
+                <div class="control-item">
+                    <label for="eq-low-mid-gain">Low Mid (250-1k Hz)</label>
+                    <input type="range" id="eq-low-mid-gain" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="eq-low-mid-gain-value">1.00x</span>
+                </div>
+                <div class="control-item">
+                    <label for="eq-high-mid-gain">High Mid (1k-4k Hz)</label>
+                    <input type="range" id="eq-high-mid-gain" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="eq-high-mid-gain-value">1.00x</span>
+                </div>
+                <div class="control-item">
+                    <label for="eq-treble-gain">Treble (4k-12k Hz)</label>
+                    <input type="range" id="eq-treble-gain" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="eq-treble-gain-value">1.00x</span>
+                </div>
+                <div class="control-item">
+                    <label for="eq-air-gain">Air (12k-20k Hz)</label>
+                    <input type="range" id="eq-air-gain" min="0" max="3" step="0.05" value="1.0">
+                    <span class="value-display" id="eq-air-gain-value">1.00x</span>
+                </div>
             </div>
 
         </div>
@@ -268,10 +443,34 @@
 
         // Initialize the interface
         document.addEventListener('DOMContentLoaded', function() {
-            loadSettings();
+            loadAudioDevices().then(loadSettings);
             setupEventListeners();
             startStatusUpdates();
         });
+
+        async function loadAudioDevices(preserveSelection = true) {
+            try {
+                const response = await fetch('/api/audio-devices');
+                if (!response.ok) return;
+                const payload = await response.json();
+                const devices = payload.devices || [];
+                const select = document.getElementById('audio-device');
+                if (!select) return;
+                const existing = preserveSelection ? (settings.audio_device || select.value) : '';
+                select.innerHTML = '';
+                devices.forEach(dev => {
+                    const opt = document.createElement('option');
+                    opt.value = dev.id;
+                    opt.textContent = dev.name;
+                    select.appendChild(opt);
+                });
+                if (existing && [...select.options].some(o => o.value === existing)) {
+                    select.value = existing;
+                }
+            } catch (error) {
+                console.error('Failed to load audio devices:', error);
+            }
+        }
 
         // Load current settings from server
         async function loadSettings() {
@@ -288,29 +487,53 @@
         // Update UI elements with current settings
         function updateUI() {
             for (const [key, value] of Object.entries(settings)) {
-                const element = document.getElementById(key.replace('_', '-'));
+                const element = document.getElementById(key.replaceAll('_', '-'));
                 if (element) {
                     if (element.type === 'checkbox') {
                         element.checked = value;
                     } else {
                         element.value = value;
                     }
-                    updateValueDisplay(key.replace('_', '-'), value);
+                    updateValueDisplay(key.replaceAll('_', '-'), value);
                 }
             }
+            updateAudioFileLabel();
+        }
+
+        function updateAudioFileLabel() {
+            const label = document.getElementById('audio-file-label');
+            if (!label) return;
+            const full = settings.audio || '';
+            if (!full) {
+                label.textContent = '(none)';
+                return;
+            }
+            const parts = full.split(/[\\/]/);
+            label.textContent = parts[parts.length - 1] || full;
         }
 
         // Setup event listeners for all controls
         function setupEventListeners() {
             // Range inputs and selects
             const controls = ['fps', 'pixel-size', 'seconds-per-transition', 'hold', 
-                            'transition', 'easing'];
+                            'transition', 'easing', 'reactive-style', 'reactive-enabled', 'audio-device',
+                            'window-width', 'window-height', 'window-x', 'window-y',
+                            'reactive-master-gain',
+                            'pulse-enabled', 'pulse-strength', 'pulse-band',
+                            'warp-enabled', 'warp-strength', 'warp-band',
+                            'color-enabled', 'color-strength', 'color-band',
+                            'glow-enabled', 'glow-strength', 'glow-band',
+                            'strobe-enabled', 'strobe-strength', 'strobe-band',
+                            'trails-enabled', 'trails-strength', 'trails-band',
+                            'eq-sub-gain', 'eq-bass-gain', 'eq-low-mid-gain',
+                            'eq-high-mid-gain', 'eq-treble-gain', 'eq-air-gain'];
 
             controls.forEach(id => {
                 const element = document.getElementById(id);
                 if (element) {
                     element.addEventListener('input', function() {
-                        updateSetting(id.replaceAll('-', '_'), this.value);
+                        const value = element.type === 'checkbox' ? this.checked : this.value;
+                        updateSetting(id.replaceAll('-', '_'), value);
                         updateValueDisplay(id, this.value);
                     });
                 }
@@ -325,6 +548,8 @@
                 let displayValue = value;
                 if (id === 'seconds-per-transition' || id === 'hold') {
                     displayValue = parseFloat(value).toFixed(1) + 's';
+                } else if (id.endsWith('-gain') || id.endsWith('-strength') || id === 'reactive-master-gain') {
+                    displayValue = parseFloat(value).toFixed(2) + 'x';
                 }
                 display.textContent = displayValue;
             }
@@ -351,6 +576,37 @@
             } catch (error) {
                 console.error('Failed to update setting:', error);
                 updateStatus('Error: Connection failed');
+            }
+        }
+
+        async function uploadAudioFile() {
+            const input = document.getElementById('audio-file-input');
+            if (!input || !input.files || input.files.length === 0) {
+                updateStatus('Select an audio file first');
+                return;
+            }
+            const file = input.files[0];
+            const form = new FormData();
+            form.append('file', file);
+            try {
+                const response = await fetch('/api/audio-file', {
+                    method: 'POST',
+                    body: form
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    updateStatus(`Upload failed: ${result.error || 'unknown error'}`);
+                    return;
+                }
+                settings.audio = result.audio;
+                settings.audio_device = '__file__';
+                const audioDevice = document.getElementById('audio-device');
+                if (audioDevice) audioDevice.value = '__file__';
+                updateAudioFileLabel();
+                updateStatus(`Loaded audio file: ${result.filename}`);
+            } catch (error) {
+                console.error('Failed to upload audio file:', error);
+                updateStatus('Upload failed: connection error');
             }
         }
 

@@ -6,13 +6,15 @@ Contains the main function and argument parsing logic.
 import argparse
 import logging
 import random
+import sys
 import time
 import subprocess
 from pathlib import Path
 import cv2
 import imageio
 
-from .config import USE_PYTORCH, PYTORCH_AVAILABLE, DEVICE
+from . import config
+from .config import PYTORCH_AVAILABLE, DEVICE
 from .utils import parse_size, list_images, fit_letterbox
 from .realtime import play_realtime, get_random_transition_function
 from .transitions import (
@@ -25,6 +27,17 @@ from .transitions import (
     make_sorted_transition_frames,
     make_hue_sorted_transition_frames
 )
+
+
+def _get_cli_overrides(argv):
+    """Return argument names explicitly provided on the command line."""
+    overrides = set()
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        flag = token.split("=", 1)[0]
+        overrides.add(flag[2:].replace("-", "_"))
+    return overrides
 
 
 def main():
@@ -45,17 +58,54 @@ def main():
     ap.add_argument("--transition", type=str, default="default",
                     choices=["default", "swarm", "tornado", "swirl", "drip", "rain", "sorted", "hue-sorted", "random"],
                     help="Select the type of transition. Use 'random' to randomly choose a different transition for each frame transition.")
-    ap.add_argument("--audio", type=Path, default=None,
-                    help="Audio file to include in the output video")
+    ap.add_argument("--audio", type=str, default=None,
+                    help="Audio source: file path or (with --realtime) input device name")
+    ap.add_argument("--audio-device", type=str, default=None,
+                    help="Realtime reactive input device (default, index:N, or device name)")
     ap.add_argument("--realtime", action="store_true",
                     help="Play slideshow in realtime instead of writing to file")
+    ap.add_argument("--reactive", action="store_true",
+                    help="Enable immersive audio-reactive visuals (requires --realtime and --audio)")
+    ap.add_argument("--reactive-style", type=str, default="dramatic",
+                    choices=["subtle", "dramatic", "extreme"],
+                    help="Reactive visual style when --reactive is enabled")
     ap.add_argument("--use-pytorch", action="store_true",
                     help="Enable PyTorch GPU acceleration (requires PyTorch installation)")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                     help="Set the log level for the script")
     ap.add_argument("--web-gui", action="store_true",
                     help="Enable web-based GUI for realtime control (requires --realtime and Flask)")
+    ap.add_argument("--window-width", type=int, default=None,
+                    help="Realtime window width (overrides saved web GUI setting)")
+    ap.add_argument("--window-height", type=int, default=None,
+                    help="Realtime window height (overrides saved web GUI setting)")
+    ap.add_argument("--window-x", type=int, default=None,
+                    help="Realtime window X position (overrides saved web GUI setting)")
+    ap.add_argument("--window-y", type=int, default=None,
+                    help="Realtime window Y position (overrides saved web GUI setting)")
     args = ap.parse_args()
+    cli_overrides = _get_cli_overrides(sys.argv[1:])
+    args._cli_overrides = cli_overrides
+
+    # Load persisted web GUI settings; explicit CLI flags always take precedence.
+    try:
+        from .web_gui import load_persisted_settings
+        persisted = load_persisted_settings()
+    except Exception:
+        persisted = {}
+    if isinstance(persisted, dict):
+        for key, value in persisted.items():
+            if hasattr(args, key) and key not in cli_overrides:
+                setattr(args, key, value)
+
+    if args.window_width is None:
+        args.window_width = args.size[0]
+    if args.window_height is None:
+        args.window_height = args.size[1]
+    if args.window_x is None:
+        args.window_x = 80
+    if args.window_y is None:
+        args.window_y = 80
 
 
     # Validate web GUI requirements
@@ -63,6 +113,21 @@ def main():
         if not args.realtime:
             print("Error: --web-gui can only be used with --realtime mode")
             raise SystemExit(1)
+
+    if args.reactive and not args.realtime:
+        print("Error: --reactive can only be used with --realtime mode")
+        raise SystemExit(1)
+
+    audio_candidate = Path(args.audio) if args.audio else None
+    if args.realtime and args.audio and not (audio_candidate.exists() and audio_candidate.is_file()) and not args.audio_device:
+        # Convenience: allow --audio <device-name> in realtime mode.
+        args.audio_device = args.audio
+        args.audio = None
+        cli_overrides.add("audio_device")
+
+    if args.audio_device and not args.realtime:
+        print("Error: --audio-device can only be used with --realtime mode")
+        raise SystemExit(1)
 
     # Configure logging
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
@@ -82,13 +147,12 @@ def main():
         logging.debug(f"Using provided random seed: {args.seed}")
 
     # Set PyTorch usage based on command-line argument
-    global USE_PYTORCH
-    USE_PYTORCH = args.use_pytorch
-    if USE_PYTORCH and PYTORCH_AVAILABLE:
+    config.USE_PYTORCH = args.use_pytorch
+    if config.USE_PYTORCH and PYTORCH_AVAILABLE:
         logging.info(f"PyTorch acceleration enabled (using {DEVICE})")
-    elif USE_PYTORCH and not PYTORCH_AVAILABLE:
+    elif config.USE_PYTORCH and not PYTORCH_AVAILABLE:
         logging.warning("PyTorch acceleration requested but PyTorch is not available")
-        USE_PYTORCH = False
+        config.USE_PYTORCH = False
 
     # Construct default filename if --out is not specified and not in realtime mode
     if not args.realtime and args.out is None:
@@ -128,8 +192,12 @@ def main():
         play_realtime(imgs, args)
         return
 
+    if args.audio_device:
+        logging.error("--audio-device is only supported in --realtime mode.")
+        raise SystemExit(1)
+
     # Check if audio file exists if provided
-    if args.audio and not args.audio.exists():
+    if args.audio and not Path(args.audio).exists():
         logging.error(f"Audio file not found: {args.audio}")
         raise SystemExit(1)
 

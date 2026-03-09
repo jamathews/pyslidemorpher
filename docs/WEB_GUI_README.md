@@ -111,12 +111,23 @@ Once the slideshow is running, open `http://localhost:5001` in your browser to a
 
 #### Audio Section (when audio is provided)
 - **Reactive Mode**: Toggle audio-reactive transitions
+- **Reactive Style**: Switch between `subtle`, `dramatic`, and `extreme` live
+- **Reactive Audio Source**: Select `Audio File Track`, `System Default Input`, or any detected input device
+- **Refresh Devices**: Re-scan inputs after plugging in a microphone/interface
+- **Audio File Track Upload**: Pick a local audio file in the browser and load it into the running slideshow
+- **Reactive Mixer**: Enable/disable and tune stacked effects (pulse, warp, color, glow, strobe, trails)
+- **Reactive EQ**: Route each effect to an audio band and boost/cut sub, bass, mids, treble, and air
 - **Audio Threshold**: Sensitivity for audio triggers (0.0-1.0)
 
 #### Playback Controls
 - **Pause/Resume**: Control slideshow playback
 - **Restart**: Restart the slideshow from the beginning
 - **Next/Previous**: Skip between images
+
+#### Persistence
+- Web GUI settings are saved automatically to `pyslidemorpher_web_settings.json` in the current working directory whenever you change a control.
+- On startup, settings are loaded from this file.
+- Explicit CLI flags (for example `--fps`, `--transition`, `--reactive-style`, `--window-width`) override file values for that run.
 
 ## Technical Details
 
