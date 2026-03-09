@@ -79,6 +79,133 @@ for _band in REACTIVE_BANDS:
     DEFAULT_REACTIVE_CONTROLS[f"eq_{_band}_gain"] = 1.0
 
 
+TRANSITION_FUNCTIONS = {
+    "swarm": make_swarm_transition_frames,
+    "tornado": make_tornado_transition_frames,
+    "swirl": make_swirl_transition_frames,
+    "drip": make_drip_transition_frames,
+    "rain": make_rainfall_transition_frames,
+    "sorted": make_sorted_transition_frames,
+    "hue-sorted": make_hue_sorted_transition_frames,
+}
+
+WEB_SYNC_KEYS = [
+    "fps",
+    "seconds_per_transition",
+    "hold",
+    "pixel_size",
+    "transition",
+    "easing",
+    "window_width",
+    "window_height",
+    "window_x",
+    "window_y",
+    "reactive_style",
+    "audio_device",
+    "audio",
+]
+
+
+def get_transition_function(transition_name):
+    """Get transition function for a transition name."""
+    if transition_name == "random":
+        return get_random_transition_function()
+    return TRANSITION_FUNCTIONS.get(transition_name, make_transition_frames)
+
+
+class SettingsNamespace:
+    """Namespace built from args + optional web-controller overrides."""
+
+    def __init__(self, settings_dict, original_args):
+        for key, value in vars(original_args).items():
+            setattr(self, key, value)
+        for key, value in settings_dict.items():
+            setattr(self, key, value)
+
+
+def _drain_queue_nowait(queue_obj):
+    """Best-effort non-blocking queue drain."""
+    while not queue_obj.empty():
+        try:
+            queue_obj.get_nowait()
+        except Exception:
+            break
+
+
+def _start_frame_generator(frame_generator):
+    """Start and return a daemon frame-generator thread."""
+    generator_thread = threading.Thread(target=frame_generator, daemon=True)
+    generator_thread.start()
+    return generator_thread
+
+
+def _sync_args_from_web_settings(args, current_settings):
+    """Copy dynamic web settings into args namespace for compatibility."""
+    settings_changed = False
+
+    for key in WEB_SYNC_KEYS:
+        new_value = current_settings.get(key)
+        if getattr(args, key, None) != new_value:
+            setattr(args, key, new_value)
+            settings_changed = True
+
+    reactive_enabled = bool(current_settings.get("reactive_enabled", getattr(args, "reactive", False)))
+    if getattr(args, "reactive", False) != reactive_enabled:
+        args.reactive = reactive_enabled
+        settings_changed = True
+
+    for key, default_value in DEFAULT_REACTIVE_CONTROLS.items():
+        current_value = current_settings.get(key, default_value)
+        if getattr(args, key, default_value) != current_value:
+            setattr(args, key, current_value)
+            settings_changed = True
+
+    return settings_changed
+
+
+def _restart_playback(frame_buffer, frame_generator):
+    """Clear pending frames and restart generation thread."""
+    _drain_queue_nowait(frame_buffer)
+    return _start_frame_generator(frame_generator)
+
+
+def _handle_web_command(command, frame_buffer, frame_generator, paused, start_time, frame_count, previous_reactive_frame):
+    """Apply a single web command and return updated playback state."""
+    stop_requested = False
+    generator_thread = None
+
+    if command == "pause":
+        paused = True
+        logging.info("Paused via web interface")
+    elif command == "resume":
+        paused = False
+        start_time = time.time()
+        frame_count = 0
+        logging.info("Resumed via web interface")
+    elif command == "restart":
+        logging.info("Restarting via web interface...")
+        generator_thread = _restart_playback(frame_buffer, frame_generator)
+        start_time = time.time()
+        frame_count = 0
+        paused = False
+        previous_reactive_frame = None
+    elif command == "next":
+        _drain_queue_nowait(frame_buffer)
+        logging.info("Skipped to next image via web interface")
+    elif command == "stop":
+        logging.info("Stopping slideshow via web interface...")
+        stop_requested = True
+
+    return (
+        paused,
+        start_time,
+        frame_count,
+        previous_reactive_frame,
+        stop_requested,
+        generator_thread,
+    )
+
+
 def get_random_transition_function():
     """Randomly select a transition function from available options.
 
@@ -517,7 +644,6 @@ def _apply_audio_reactive_effect(frame_bgr, audio_features, elapsed_time, style=
 def play_realtime(imgs, args):
     """Play slideshow in realtime using OpenCV display with optimized performance."""
     W, H = args.size
-    frame_time = 1.0 / args.fps  # Time per frame in seconds
 
     # Initialize audio if provided
     audio_start_time = None
@@ -674,15 +800,6 @@ def play_realtime(imgs, args):
         """Get current settings from web controller or fallback to args."""
         if web_controller:
             settings = web_controller.get_settings()
-            # Create a namespace object similar to args for compatibility
-            class SettingsNamespace:
-                def __init__(self, settings_dict, original_args):
-                    # Copy all original args first
-                    for key, value in vars(original_args).items():
-                        setattr(self, key, value)
-                    # Override with web controller settings (all keys for dynamic controls).
-                    for key, value in settings_dict.items():
-                        setattr(self, key, value)
             return SettingsNamespace(settings, args)
         return args
 
@@ -842,8 +959,6 @@ def play_realtime(imgs, args):
     def frame_generator():
         """Generate frames in a separate thread for better performance."""
         try:
-            # Check settings and log changes if any
-            current_settings = check_and_log_settings_changes()
             # Standard mode: generate frames based on time
             standard_frame_generator()
         except Exception as e:
@@ -903,30 +1018,8 @@ def play_realtime(imgs, args):
         frame_buffer.put(None)
 
 
-    def get_transition_function(transition_name):
-        """Get the appropriate transition function based on name."""
-        if transition_name == "random":
-            return get_random_transition_function()
-        elif transition_name == "swarm":
-            return make_swarm_transition_frames
-        elif transition_name == "tornado":
-            return make_tornado_transition_frames
-        elif transition_name == "swirl":
-            return make_swirl_transition_frames
-        elif transition_name == "drip":
-            return make_drip_transition_frames
-        elif transition_name == "rain":
-            return make_rainfall_transition_frames
-        elif transition_name == "sorted":
-            return make_sorted_transition_frames
-        elif transition_name == "hue-sorted":
-            return make_hue_sorted_transition_frames
-        else:
-            return make_transition_frames
-
     # Start frame generation in separate thread
-    generator_thread = threading.Thread(target=frame_generator, daemon=True)
-    generator_thread.start()
+    generator_thread = _start_frame_generator(frame_generator)
 
     current_settings = check_and_log_settings_changes()
     apply_window_settings(current_settings)
@@ -956,9 +1049,7 @@ def play_realtime(imgs, args):
                     frame = frame_buffer.get(timeout=1.0)
                     if frame is None:  # End of frames
                         logging.info("Slideshow completed. Restarting...")
-                        # Restart by creating new generator thread
-                        generator_thread = threading.Thread(target=frame_generator, daemon=True)
-                        generator_thread.start()
+                        generator_thread = _start_frame_generator(frame_generator)
                         previous_reactive_frame = None
                         continue
 
@@ -1011,15 +1102,7 @@ def play_realtime(imgs, args):
             elif key == ord('r'):
                 # Restart slideshow
                 logging.info("Restarting slideshow...")
-                # Clear buffer
-                while not frame_buffer.empty():
-                    try:
-                        frame_buffer.get_nowait()
-                    except:
-                        break
-                # Start new generator thread
-                generator_thread = threading.Thread(target=frame_generator, daemon=True)
-                generator_thread.start()
+                generator_thread = _restart_playback(frame_buffer, frame_generator)
                 start_time = time.time()
                 frame_count = 0
                 paused = False
@@ -1031,96 +1114,31 @@ def play_realtime(imgs, args):
                 try:
                     while not web_controller.command_queue.empty():
                         command = web_controller.command_queue.get_nowait()
-                        if command == 'pause':
-                            paused = True
-                            logging.info("Paused via web interface")
-                        elif command == 'resume':
-                            paused = False
-                            start_time = time.time()
-                            frame_count = 0
-                            logging.info("Resumed via web interface")
-                        elif command == 'restart':
-                            logging.info("Restarting via web interface...")
-                            while not frame_buffer.empty():
-                                try:
-                                    frame_buffer.get_nowait()
-                                except:
-                                    break
-                            generator_thread = threading.Thread(target=frame_generator, daemon=True)
-                            generator_thread.start()
-                            start_time = time.time()
-                            frame_count = 0
-                            paused = False
-                            previous_reactive_frame = None
-                        elif command == 'next':
-                            # Skip to next image by clearing buffer
-                            while not frame_buffer.empty():
-                                try:
-                                    frame_buffer.get_nowait()
-                                except:
-                                    break
-                            logging.info("Skipped to next image via web interface")
-                        elif command == 'stop':
-                            logging.info("Stopping slideshow via web interface...")
-                            stop_requested = True
+                        (
+                            paused,
+                            start_time,
+                            frame_count,
+                            previous_reactive_frame,
+                            cmd_stop_requested,
+                            cmd_generator_thread,
+                        ) = _handle_web_command(
+                            command,
+                            frame_buffer,
+                            frame_generator,
+                            paused,
+                            start_time,
+                            frame_count,
+                            previous_reactive_frame,
+                        )
+                        stop_requested = stop_requested or cmd_stop_requested
+                        if cmd_generator_thread is not None:
+                            generator_thread = cmd_generator_thread
                 except:
                     pass  # Ignore queue errors
 
                 # Update args with new settings from web interface
                 current_settings = web_controller.get_settings()
-                settings_changed = False
-
-                if args.fps != current_settings['fps']:
-                    args.fps = current_settings['fps']
-                    frame_time = 1.0 / args.fps
-                    settings_changed = True
-
-                if args.seconds_per_transition != current_settings['seconds_per_transition']:
-                    args.seconds_per_transition = current_settings['seconds_per_transition']
-                    settings_changed = True
-
-                if args.hold != current_settings['hold']:
-                    args.hold = current_settings['hold']
-                    settings_changed = True
-
-                if args.pixel_size != current_settings['pixel_size']:
-                    args.pixel_size = current_settings['pixel_size']
-                    settings_changed = True
-
-                if args.transition != current_settings['transition']:
-                    args.transition = current_settings['transition']
-                    settings_changed = True
-
-                if args.easing != current_settings['easing']:
-                    args.easing = current_settings['easing']
-                    settings_changed = True
-
-                for key in ['window_width', 'window_height', 'window_x', 'window_y']:
-                    if getattr(args, key, None) != current_settings.get(key):
-                        setattr(args, key, current_settings.get(key))
-                        settings_changed = True
-
-                if getattr(args, 'reactive_style', 'dramatic') != current_settings.get('reactive_style', 'dramatic'):
-                    args.reactive_style = current_settings.get('reactive_style', 'dramatic')
-                    settings_changed = True
-
-                if getattr(args, 'reactive', False) != bool(current_settings.get('reactive_enabled', getattr(args, 'reactive', False))):
-                    args.reactive = bool(current_settings.get('reactive_enabled', args.reactive))
-                    settings_changed = True
-
-                if getattr(args, 'audio_device', '') != current_settings.get('audio_device', ''):
-                    args.audio_device = current_settings.get('audio_device', '')
-                    settings_changed = True
-
-                if getattr(args, 'audio', '') != current_settings.get('audio', ''):
-                    args.audio = current_settings.get('audio', '')
-                    settings_changed = True
-
-                for key, default_value in DEFAULT_REACTIVE_CONTROLS.items():
-                    current_value = current_settings.get(key, default_value)
-                    if getattr(args, key, default_value) != current_value:
-                        setattr(args, key, current_value)
-                        settings_changed = True
+                settings_changed = _sync_args_from_web_settings(args, current_settings)
 
 
                 # Update paused state from web interface
