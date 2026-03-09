@@ -1,15 +1,9 @@
-
-"""
-Real-time playback functionality for PySlide Morpher.
-Handles live slideshow display using OpenCV.
-"""
+"""Real-time playback orchestration for PySlide Morpher."""
 
 import json
 import logging
-import math
 import platform
 import random
-import subprocess
 import threading
 import time
 from os import environ
@@ -17,7 +11,6 @@ from pathlib import Path
 from queue import Queue
 
 import cv2
-import numpy as np
 
 environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 
@@ -31,19 +24,8 @@ try:
     import sounddevice as sd
     SOUNDDEVICE_AVAILABLE = True
 except ImportError:
+    sd = None
     SOUNDDEVICE_AVAILABLE = False
-
-
-from .transitions import (
-    make_transition_frames,
-    make_swarm_transition_frames,
-    make_tornado_transition_frames,
-    make_swirl_transition_frames,
-    make_drip_transition_frames,
-    make_rainfall_transition_frames,
-    make_sorted_transition_frames,
-    make_hue_sorted_transition_frames
-)
 
 try:
     from .web_gui import get_controller, start_web_server, FLASK_AVAILABLE
@@ -52,594 +34,36 @@ except ImportError:
     WEB_GUI_AVAILABLE = False
     logging.warning("Web GUI not available - Flask or web_gui module not found")
 
-REACTIVE_BANDS = ["sub", "bass", "low_mid", "high_mid", "treble", "air"]
-EFFECT_KEYS = ["pulse", "warp", "color", "glow", "strobe", "trails"]
-DEFAULT_REACTIVE_CONTROLS = {
-    "reactive_master_gain": 1.0,
-    "pulse_enabled": True,
-    "pulse_strength": 1.0,
-    "pulse_band": "bass",
-    "warp_enabled": True,
-    "warp_strength": 1.0,
-    "warp_band": "low_mid",
-    "color_enabled": True,
-    "color_strength": 1.0,
-    "color_band": "high_mid",
-    "glow_enabled": True,
-    "glow_strength": 1.0,
-    "glow_band": "treble",
-    "strobe_enabled": True,
-    "strobe_strength": 1.0,
-    "strobe_band": "bass",
-    "trails_enabled": True,
-    "trails_strength": 1.0,
-    "trails_band": "sub",
-}
-for _band in REACTIVE_BANDS:
-    DEFAULT_REACTIVE_CONTROLS[f"eq_{_band}_gain"] = 1.0
-
-
-TRANSITION_FUNCTIONS = {
-    "swarm": make_swarm_transition_frames,
-    "tornado": make_tornado_transition_frames,
-    "swirl": make_swirl_transition_frames,
-    "drip": make_drip_transition_frames,
-    "rain": make_rainfall_transition_frames,
-    "sorted": make_sorted_transition_frames,
-    "hue-sorted": make_hue_sorted_transition_frames,
-}
-
-WEB_SYNC_KEYS = [
-    "fps",
-    "seconds_per_transition",
-    "hold",
-    "pixel_size",
-    "transition",
-    "easing",
-    "window_width",
-    "window_height",
-    "window_x",
-    "window_y",
-    "reactive_style",
-    "audio_device",
-    "audio",
-]
-
-
-def get_transition_function(transition_name):
-    """Get transition function for a transition name."""
-    if transition_name == "random":
-        return get_random_transition_function()
-    return TRANSITION_FUNCTIONS.get(transition_name, make_transition_frames)
-
-
-class SettingsNamespace:
-    """Namespace built from args + optional web-controller overrides."""
-
-    def __init__(self, settings_dict, original_args):
-        for key, value in vars(original_args).items():
-            setattr(self, key, value)
-        for key, value in settings_dict.items():
-            setattr(self, key, value)
-
-
-def _drain_queue_nowait(queue_obj):
-    """Best-effort non-blocking queue drain."""
-    while not queue_obj.empty():
-        try:
-            queue_obj.get_nowait()
-        except Exception:
-            break
-
-
-def _start_frame_generator(frame_generator):
-    """Start and return a daemon frame-generator thread."""
-    generator_thread = threading.Thread(target=frame_generator, daemon=True)
-    generator_thread.start()
-    return generator_thread
-
-
-def _sync_args_from_web_settings(args, current_settings):
-    """Copy dynamic web settings into args namespace for compatibility."""
-    settings_changed = False
-
-    for key in WEB_SYNC_KEYS:
-        new_value = current_settings.get(key)
-        if getattr(args, key, None) != new_value:
-            setattr(args, key, new_value)
-            settings_changed = True
-
-    reactive_enabled = bool(current_settings.get("reactive_enabled", getattr(args, "reactive", False)))
-    if getattr(args, "reactive", False) != reactive_enabled:
-        args.reactive = reactive_enabled
-        settings_changed = True
-
-    for key, default_value in DEFAULT_REACTIVE_CONTROLS.items():
-        current_value = current_settings.get(key, default_value)
-        if getattr(args, key, default_value) != current_value:
-            setattr(args, key, current_value)
-            settings_changed = True
-
-    return settings_changed
-
-
-def _restart_playback(frame_buffer, frame_generator):
-    """Clear pending frames and restart generation thread."""
-    _drain_queue_nowait(frame_buffer)
-    return _start_frame_generator(frame_generator)
-
-
-def _handle_web_command(command, frame_buffer, frame_generator, paused, start_time, frame_count, previous_reactive_frame):
-    """Apply a single web command and return updated playback state."""
-    stop_requested = False
-    generator_thread = None
-
-    if command == "pause":
-        paused = True
-        logging.info("Paused via web interface")
-    elif command == "resume":
-        paused = False
-        start_time = time.time()
-        frame_count = 0
-        logging.info("Resumed via web interface")
-    elif command == "restart":
-        logging.info("Restarting via web interface...")
-        generator_thread = _restart_playback(frame_buffer, frame_generator)
-        start_time = time.time()
-        frame_count = 0
-        paused = False
-        previous_reactive_frame = None
-    elif command == "next":
-        _drain_queue_nowait(frame_buffer)
-        logging.info("Skipped to next image via web interface")
-    elif command == "stop":
-        logging.info("Stopping slideshow via web interface...")
-        stop_requested = True
-
-    return (
-        paused,
-        start_time,
-        frame_count,
-        previous_reactive_frame,
-        stop_requested,
-        generator_thread,
-    )
-
-
-def get_random_transition_function():
-    """Randomly select a transition function from available options.
-
-    Ensures that the same transition function is never selected twice in a row.
-    """
-    transition_functions = [
-        make_transition_frames,  # default
-        make_swarm_transition_frames,  # swarm
-        make_tornado_transition_frames,  # tornado
-        make_swirl_transition_frames,  # swirl
-        make_drip_transition_frames,  # drip
-        # make_rainfall_transition_frames, # rain
-        make_sorted_transition_frames,  # sorted
-        make_hue_sorted_transition_frames,  # hue-sorted
-    ]
-
-    # Initialize the last selected function attribute if it doesn't exist
-    if not hasattr(get_random_transition_function, '_last_selected'):
-        get_random_transition_function._last_selected = None
-
-    # If this is the first call or there's only one function, just return a random choice
-    if get_random_transition_function._last_selected is None or len(transition_functions) <= 1:
-        selected = random.choice(transition_functions)
-        get_random_transition_function._last_selected = selected
-        logging.info(f"Randomly selected transition function: {selected.__name__}")
-        return selected
-
-    # Create a list of available functions excluding the last selected one
-    available_functions = [func for func in transition_functions
-                           if func != get_random_transition_function._last_selected]
-
-    # Select from the available functions
-    selected = random.choice(available_functions)
-    get_random_transition_function._last_selected = selected
-    logging.info(f"Randomly selected transition function: {selected.__name__}")
-    return selected
+from .realtime_audio import (
+    _build_audio_envelope,
+    _current_audio_features,
+    FfmpegLiveAudioAnalyzer,
+    LiveAudioAnalyzer,
+)
+from .realtime_effects import _apply_audio_reactive_effect, _resolve_reactive_controls
+from .realtime_runtime import (
+    _handle_web_command,
+    _restart_playback,
+    _start_frame_generator,
+    _sync_args_from_web_settings,
+    SettingsNamespace,
+)
+from .realtime_shared import DEFAULT_REACTIVE_CONTROLS
+from .realtime_transitions import get_random_transition_function, get_transition_function
 
 
 def _play_audio_loop(audio_file):
     """Play audio file in a loop for the duration of the slideshow."""
     try:
-        # Load and play the audio file
         pygame.mixer.music.load(str(audio_file))
-        pygame.mixer.music.play(-1)  # -1 means loop indefinitely
+        pygame.mixer.music.play(-1)
         logging.debug(f"Audio loop started for: {audio_file}")
 
-        # Keep the thread alive while audio is playing
         while pygame.mixer.music.get_busy():
             time.sleep(0.1)
 
     except Exception as e:
         logging.error(f"Error in audio playback: {e}")
-
-
-def _normalize_series(values):
-    """Normalize array to 0..1 with robust percentile scaling."""
-    low = float(np.percentile(values, 5))
-    high = float(np.percentile(values, 98))
-    if high <= low:
-        return np.clip(values, 0.0, 1.0)
-    return np.clip((values - low) / (high - low), 0.0, 1.0)
-
-
-def _build_audio_envelope(audio_file, envelope_fps):
-    """Build normalized overall + per-band envelopes using ffmpeg-decoded PCM."""
-    if envelope_fps <= 0:
-        return None
-
-    try:
-        cmd = [
-            "ffmpeg",
-            "-v", "error",
-            "-i", str(audio_file),
-            "-ac", "1",
-            "-ar", "44100",
-            "-f", "f32le",
-            "-"
-        ]
-        result = subprocess.run(cmd, capture_output=True, check=True)
-    except FileNotFoundError:
-        logging.warning("Reactive mode requested, but ffmpeg is not installed.")
-        return None
-    except subprocess.CalledProcessError as err:
-        stderr = err.stderr.decode("utf-8", errors="ignore").strip()
-        logging.warning(f"Could not analyze audio for reactive mode: {stderr}")
-        return None
-
-    samples = np.frombuffer(result.stdout, dtype=np.float32)
-    if samples.size == 0:
-        logging.warning("Reactive mode audio analysis produced no samples.")
-        return None
-
-    sample_rate = 44100
-    window = max(1, int(sample_rate / envelope_fps))
-    usable = (samples.size // window) * window
-    if usable == 0:
-        return None
-
-    samples = samples[:usable].reshape(-1, window)
-    rms = np.sqrt(np.mean(samples * samples, axis=1))
-    normalized = _normalize_series(rms)
-
-    spectrum = np.abs(np.fft.rfft(samples, axis=1))
-    freqs = np.fft.rfftfreq(window, d=1.0 / sample_rate)
-    band_ranges = {
-        "sub": (20, 80),
-        "bass": (80, 250),
-        "low_mid": (250, 1000),
-        "high_mid": (1000, 4000),
-        "treble": (4000, 12000),
-        "air": (12000, 20000),
-    }
-
-    band_envelopes = {}
-    for band_name, (f_lo, f_hi) in band_ranges.items():
-        mask = (freqs >= f_lo) & (freqs < f_hi)
-        if not np.any(mask):
-            band_energy = np.zeros((samples.shape[0],), dtype=np.float32)
-        else:
-            band_energy = np.mean(spectrum[:, mask], axis=1)
-        band_envelopes[band_name] = _normalize_series(band_energy).astype(np.float32)
-
-    duration = samples.shape[0] / envelope_fps
-    return {
-        "values": normalized.astype(np.float32),
-        "bands": band_envelopes,
-        "fps": float(envelope_fps),
-        "duration": float(duration),
-    }
-
-
-def _parse_audio_device_spec(audio_device):
-    """Parse audio device selector into sounddevice-compatible spec."""
-    if not audio_device:
-        return None
-    device = str(audio_device).strip()
-    if device in {"__default__", "default"}:
-        return None
-    if device.startswith("index:"):
-        try:
-            return int(device.split(":", 1)[1])
-        except Exception:
-            return None
-    return device
-
-
-class LiveAudioAnalyzer:
-    """Capture live input audio and expose normalized overall + band features."""
-
-    def __init__(self, device, envelope_fps=30, sample_rate=44100):
-        self.device = _parse_audio_device_spec(device)
-        self.sample_rate = int(sample_rate)
-        self.envelope_fps = max(1, int(envelope_fps))
-        self.block_size = max(256, int(self.sample_rate / self.envelope_fps))
-        self.stream = None
-        self._lock = threading.Lock()
-        self._overall = 0.0
-        self._bands = {band: 0.0 for band in REACTIVE_BANDS}
-
-    def _callback(self, indata, frames, time_info, status):
-        if status:
-            pass
-        if indata is None or len(indata) == 0:
-            return
-        mono = np.asarray(indata[:, 0], dtype=np.float32)
-        self._update_features(mono)
-
-    def _update_features(self, mono):
-        if mono.size <= 0:
-            return
-        rms = float(np.sqrt(np.mean(mono * mono)))
-        rms_norm = float(np.clip(rms * 6.5, 0.0, 1.0))
-
-        spec = np.abs(np.fft.rfft(mono))
-        freqs = np.fft.rfftfreq(mono.size, d=1.0 / self.sample_rate)
-        band_ranges = {
-            "sub": (20, 80),
-            "bass": (80, 250),
-            "low_mid": (250, 1000),
-            "high_mid": (1000, 4000),
-            "treble": (4000, 12000),
-            "air": (12000, 20000),
-        }
-        bands = {}
-        for band_name, (f_lo, f_hi) in band_ranges.items():
-            mask = (freqs >= f_lo) & (freqs < f_hi)
-            if not np.any(mask):
-                val = 0.0
-            else:
-                val = float(np.mean(spec[mask]))
-            bands[band_name] = float(np.clip(val * 0.09, 0.0, 1.0))
-
-        with self._lock:
-            alpha = 0.25
-            self._overall = ((1.0 - alpha) * self._overall) + (alpha * rms_norm)
-            for band_name in REACTIVE_BANDS:
-                self._bands[band_name] = ((1.0 - alpha) * self._bands[band_name]) + (alpha * bands[band_name])
-
-    def start(self):
-        if not SOUNDDEVICE_AVAILABLE:
-            raise RuntimeError("sounddevice is not installed")
-        self.stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            blocksize=self.block_size,
-            channels=1,
-            dtype="float32",
-            device=self.device,
-            callback=self._callback,
-        )
-        self.stream.start()
-
-    def stop(self):
-        if self.stream is not None:
-            try:
-                self.stream.stop()
-                self.stream.close()
-            except Exception:
-                pass
-            self.stream = None
-
-    def get_features(self):
-        with self._lock:
-            return {
-                "overall": float(self._overall),
-                "bands": {k: float(v) for k, v in self._bands.items()},
-            }
-
-
-class FfmpegLiveAudioAnalyzer(LiveAudioAnalyzer):
-    """Capture live input audio via ffmpeg (macOS AVFoundation fallback)."""
-
-    def __init__(self, device, envelope_fps=30, sample_rate=44100):
-        super().__init__(device, envelope_fps=envelope_fps, sample_rate=sample_rate)
-        self._reader_thread = None
-        self._stop_event = threading.Event()
-        self._process = None
-
-    def _resolve_avfoundation_device(self):
-        raw = str(self.device) if self.device is not None else "0"
-        if raw in {"__default__", "default", "None"}:
-            return "0"
-        if raw.startswith("avf:"):
-            return raw.split(":", 1)[1]
-        if raw.startswith("index:"):
-            return raw.split(":", 1)[1]
-        if raw.isdigit():
-            return raw
-        return "0"
-
-    def start(self):
-        if platform.system() != "Darwin":
-            raise RuntimeError("ffmpeg live analyzer fallback currently supports macOS only")
-
-        audio_index = self._resolve_avfoundation_device()
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel", "error",
-            "-f", "avfoundation",
-            "-i", f":{audio_index}",
-            "-ac", "1",
-            "-ar", str(self.sample_rate),
-            "-f", "f32le",
-            "-"
-        ]
-        self._process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self._stop_event.clear()
-
-        def _reader():
-            block = self.block_size
-            need_bytes = block * 4  # f32le mono
-            while not self._stop_event.is_set() and self._process and self._process.stdout:
-                chunk = self._process.stdout.read(need_bytes)
-                if not chunk:
-                    break
-                mono = np.frombuffer(chunk, dtype=np.float32)
-                if mono.size > 0:
-                    self._update_features(mono)
-
-        self._reader_thread = threading.Thread(target=_reader, daemon=True)
-        self._reader_thread.start()
-
-    def stop(self):
-        self._stop_event.set()
-        if self._process is not None:
-            try:
-                self._process.terminate()
-            except Exception:
-                pass
-            self._process = None
-        self._reader_thread = None
-
-
-def _current_audio_features(audio_envelope, audio_start_time):
-    """Get current normalized overall + per-band levels for looped playback time."""
-    if not audio_envelope or audio_start_time is None:
-        return {"overall": 0.0, "bands": {band: 0.0 for band in REACTIVE_BANDS}}
-
-    duration = audio_envelope["duration"]
-    if duration <= 0:
-        return {"overall": 0.0, "bands": {band: 0.0 for band in REACTIVE_BANDS}}
-
-    elapsed = (time.time() - audio_start_time) % duration
-    idx = int(elapsed * audio_envelope["fps"])
-    idx = max(0, min(idx, len(audio_envelope["values"]) - 1))
-    bands = {}
-    for band in REACTIVE_BANDS:
-        series = audio_envelope.get("bands", {}).get(band)
-        bands[band] = float(series[idx]) if series is not None and len(series) > idx else 0.0
-    return {"overall": float(audio_envelope["values"][idx]), "bands": bands}
-
-
-def _resolve_reactive_controls(current_settings):
-    """Build effective reactive controls from settings with defaults."""
-    controls = DEFAULT_REACTIVE_CONTROLS.copy()
-    if current_settings is None:
-        return controls
-    for key in list(controls.keys()):
-        if hasattr(current_settings, key):
-            controls[key] = getattr(current_settings, key)
-    return controls
-
-
-def _apply_audio_reactive_effect(frame_bgr, audio_features, elapsed_time, style="dramatic", previous_frame=None, controls=None):
-    """Apply stackable audio-reactive effects using per-band routing controls."""
-    controls = controls or DEFAULT_REACTIVE_CONTROLS
-    overall = float(audio_features.get("overall", 0.0))
-    bands = audio_features.get("bands", {})
-    if overall <= 0:
-        return frame_bgr
-
-    h, w = frame_bgr.shape[:2]
-    cx, cy = w // 2, h // 2
-    drive = float(np.clip(overall, 0.0, 1.0)) ** 1.35
-    style = style if style in {"subtle", "dramatic", "extreme"} else "dramatic"
-
-    if style == "subtle":
-        strength = 0.55
-    elif style == "extreme":
-        strength = 2.2
-    else:
-        strength = 1.0
-
-    master_gain = float(max(0.0, controls.get("reactive_master_gain", 1.0)))
-
-    def effect_drive(effect_key, fallback_band):
-        if not controls.get(f"{effect_key}_enabled", True):
-            return 0.0
-        band = str(controls.get(f"{effect_key}_band", fallback_band))
-        band_level = float(bands.get(band, overall))
-        eq = float(max(0.0, controls.get(f"eq_{band}_gain", 1.0)))
-        eff_gain = float(max(0.0, controls.get(f"{effect_key}_strength", 1.0)))
-        return float(np.clip((band_level * eq * eff_gain * master_gain), 0.0, 2.5))
-
-    pulse_drive = effect_drive("pulse", "bass")
-    warp_drive = effect_drive("warp", "low_mid")
-    color_drive = effect_drive("color", "high_mid")
-    glow_drive = effect_drive("glow", "treble")
-    strobe_drive = effect_drive("strobe", "bass")
-    trails_drive = effect_drive("trails", "sub")
-
-    # Strong pulse zoom and rotation.
-    zoom = 1.0 + (0.24 * strength) * pulse_drive + (0.08 * strength) * math.sin(elapsed_time * 2.8)
-    if pulse_drive > 0 and zoom > 1.001:
-        crop_w = max(2, int(w / zoom))
-        crop_h = max(2, int(h / zoom))
-        x0 = (w - crop_w) // 2
-        y0 = (h - crop_h) // 2
-        pulsed = cv2.resize(frame_bgr[y0:y0 + crop_h, x0:x0 + crop_w], (w, h), interpolation=cv2.INTER_LINEAR)
-    else:
-        pulsed = frame_bgr
-
-    angle = (18.0 * strength * pulse_drive) * math.sin(elapsed_time * 4.5)
-    rot = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
-    pulsed = cv2.warpAffine(pulsed, rot, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-
-    # Color drift and channel split.
-    hsv = cv2.cvtColor(pulsed, cv2.COLOR_BGR2HSV).astype(np.float32)
-    hue_shift = (42.0 * strength) * color_drive + (22.0 * strength) * math.sin(elapsed_time * 1.5)
-    hsv[..., 0] = (hsv[..., 0] + hue_shift) % 180.0
-    hsv[..., 1] = np.clip(hsv[..., 1] * (1.10 + (0.9 * strength) * color_drive), 0.0, 255.0)
-    hsv[..., 2] = np.clip(hsv[..., 2] * (1.0 + (0.32 * strength) * color_drive), 0.0, 255.0)
-    shifted = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-
-    split_px = max(1, int(2 + (32 * strength * color_drive)))
-    b, g, r = cv2.split(shifted)
-    b = np.roll(b, -split_px, axis=1)
-    r = np.roll(r, split_px, axis=0)
-    out = cv2.merge((b, g, r)) if color_drive > 0 else shifted
-
-    # Glow.
-    sigma = 1.0 + (18.0 * strength * glow_drive)
-    bloom = cv2.GaussianBlur(out, (0, 0), sigmaX=sigma, sigmaY=sigma)
-    out = cv2.addWeighted(out, 1.0, bloom, (0.15 + 0.95 * glow_drive), 0.0)
-
-    # Strobe with more punch in extreme mode.
-    strobe_threshold = 0.80 if style == "subtle" else 0.64 if style == "dramatic" else 0.40
-    flash = max(0.0, strobe_drive - strobe_threshold) * (2.2 + 1.3 * strength)
-    if flash > 0:
-        out = cv2.convertScaleAbs(out, alpha=1.0 + flash, beta=85.0 * flash)
-
-    # Pulsing vignette to focus energy into the center and add tunnel-like depth.
-    yy, xx = np.ogrid[:h, :w]
-    dist = np.sqrt(((xx - cx) / max(1, cx)) ** 2 + ((yy - cy) / max(1, cy)) ** 2)
-    vignette = np.clip(1.22 - (0.45 + (0.45 * strength) * max(pulse_drive, warp_drive)) * dist, 0.35, 1.65)
-    out = np.clip(out.astype(np.float32) * vignette[..., None], 0, 255).astype(np.uint8)
-
-    # Radial warp.
-    amp = (0.010 + 0.065 * strength) * warp_drive
-    if amp > 0.0005:
-        y, x = np.indices((h, w), dtype=np.float32)
-        dx = x - cx
-        dy = y - cy
-        radius = np.sqrt(dx * dx + dy * dy) + 1e-6
-        wave = np.sin((radius / max(1.0, min(w, h) * 0.12)) - (elapsed_time * 10.0))
-        displacement = amp * min(w, h) * wave
-        map_x = (x + (dx / radius) * displacement).astype(np.float32)
-        map_y = (y + (dy / radius) * displacement).astype(np.float32)
-        out = cv2.remap(out, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-
-    # Neon edges piggyback on glow drive.
-    if glow_drive > 0:
-        gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 70, 160)
-        edge_color = cv2.applyColorMap(edges, cv2.COLORMAP_TURBO)
-        out = cv2.addWeighted(out, 1.0, edge_color, 0.06 + (0.52 * glow_drive * strength), 0.0)
-
-    # Temporal trails.
-    if trails_drive > 0 and previous_frame is not None and previous_frame.shape == out.shape:
-        trail_mix = np.clip(0.08 + 0.46 * trails_drive * strength, 0.0, 0.7)
-        out = cv2.addWeighted(out, 1.0 - trail_mix, previous_frame, trail_mix, 0.0)
-
-    return out
-
 
 def play_realtime(imgs, args):
     """Play slideshow in realtime using OpenCV display with optimized performance."""
@@ -664,7 +88,11 @@ def play_realtime(imgs, args):
     if reactive_enabled and current_audio_device and str(current_audio_device).strip() != "__file__":
         if SOUNDDEVICE_AVAILABLE:
             try:
-                live_audio_analyzer = LiveAudioAnalyzer(current_audio_device, envelope_fps=max(args.fps, 24))
+                live_audio_analyzer = LiveAudioAnalyzer(
+                    current_audio_device,
+                    sd,
+                    envelope_fps=max(args.fps, 24),
+                )
                 live_audio_analyzer.start()
                 active_audio_source = "device"
                 logging.info(f"Reactive source: live input device ({current_audio_device})")
@@ -945,7 +373,11 @@ def play_realtime(imgs, args):
                 return
 
         try:
-            live_audio_analyzer = LiveAudioAnalyzer(desired, envelope_fps=max(args.fps, 24))
+            live_audio_analyzer = LiveAudioAnalyzer(
+                desired,
+                sd,
+                envelope_fps=max(args.fps, 24),
+            )
             live_audio_analyzer.start()
             active_audio_source = "device"
             logging.info(f"Reactive source switched to live input device ({desired}).")
