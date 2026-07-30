@@ -1,0 +1,6 @@
+[run]
+source = pyslidemorpher
+
+[report]
+show_missing = True
+skip_covered = False

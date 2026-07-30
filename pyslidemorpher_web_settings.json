@@ -6,7 +6,7 @@
   "transition": "random",
   "easing": "smoothstep",
   "audio": "/Users/jmathews/src/github.com/jamathews/pyslidemorpher-for-codex-ai/.pyslidemorpher_uploads/5dca15a6c0164aceba9bac8d782c3a75_Fragment 0011.mp3",
-  "reactive_enabled": false,
+  "reactive_enabled": true,
   "reactive_style": "extreme",
   "audio_device": "default",
   "reactive_master_gain": 0.25,
