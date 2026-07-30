@@ -209,3 +209,4 @@ __marimo__/
 images/
 audio/
 **/*.mp4
+**/.DS_Store
